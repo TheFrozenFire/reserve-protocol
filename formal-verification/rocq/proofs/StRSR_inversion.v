@@ -97,6 +97,9 @@ Local Lemma payoutRewards_active_local
     Storage.lastPayout              := s.(Storage.lastPayout) +
                                        (now - s.(Storage.lastPayout));
     Storage.queue                   := s.(Storage.queue);
+    Storage.era                     := s.(Storage.era);
+    Storage.draftEra                := s.(Storage.draftEra);
+    Storage.draftRSR                := s.(Storage.draftRSR);
   |}.
 Proof.
   intros Hle. unfold payoutRewards.
@@ -625,6 +628,9 @@ Definition genesis_storage : Storage.t := {|
   Storage.ratio                   := 0;
   Storage.lastPayout              := 0;
   Storage.queue                   := [];
+  Storage.era                     := 0;
+  Storage.draftEra                := 0;
+  Storage.draftRSR                := 0;
 |}.
 
 (** On the genesis era, both the simulation and production mint

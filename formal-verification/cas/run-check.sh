@@ -18,6 +18,8 @@ scripts=(
   rebalance/basket_range_simulation.gp
   strsr/exchange_rate_evolution.gp
   strsr/withdrawal_queue.gp
+  strsr/cancel_unstake.gp
+  strsr/seize_rsr.gp
   furnace/melt_curve.gp
   distributor/share_conservation.gp
   trade_lib/slippage_sufficiency.gp
