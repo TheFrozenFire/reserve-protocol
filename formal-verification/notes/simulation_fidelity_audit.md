@@ -856,24 +856,80 @@ settle math; transferring them requires (i) the trade is OPEN,
 6. The `broker.reportViolation()` callback is unmodeled — lemmas about violation surface a boolean flag, not the broker side effect.
 7. The `cancel`-window enforcement is partially modeled: `cancellationEndTime` is computed but the actual revert path inside Gnosis (when cancellation is attempted past it) lives outside this simulation.
 
-## Collateral
+## Collateral (gold-standard audit)
 
-**State machine.** Models `Status` (SOUND/IFFY/DISABLED), `statusOf`,
-`markStatus`, `softDefaultStatus`, `updateExposed`, `refresh`. Storage
-captures `whenDefault`, `exposedReferencePrice`, `delayUntilDefault`,
-`revenueShowing`, `pegBottom`, `pegTop`.
+The simulation captures **the SOUND/IFFY/DISABLED state machine via
+`statusOf` (decoding the `_whenDefault` uint48 sentinel), `markStatus`
+(the FiatCollateral.sol L180–199 update rule), `softDefaultStatus`
+(the peg-deviation predicate at L150), `updateExposed` (the hard-default
+revenue-hiding update from AppreciatingFiatCollateral.sol L86–96), and
+the composed `refresh` that threads hard-default then soft-default**.
+It omits **the oracle layer (`tryPrice` chainlink-feed read,
+`oracleTimeout`, `oracleError`, the price-decay `priceTimeout`), the
+`init()` constructor, the `claimRewards` reward-claim entry, the
+`maxTradeVolume` storage, the `targetName` immutable, the
+`savedLowPrice`/`savedHighPrice`/`savedPegPrice`/`lastSave` cache, the
+`tryPrice` try-catch IFFY-fallback path, the `CollateralStatusChanged`
+event, and all subclass-specific overrides (CTokenFiatCollateral,
+ATokenFiatCollateral, RTokenAsset, etc.)**. The proofs against this
+model are correct for the state-machine math and the hard/soft-default
+predicates; transferring them to production requires the caller has
+already discharged the oracle boundary.
 
-**Faithful match** for the documented state transitions. DISABLED is
-correctly terminal.
+### State omitted
 
-**Gaps**:
-- `revenueShowing` is treated as immutable in the simulation but
-  `revenueHiding` may be governance-mutable in some collateral
-  variants — worth checking per-plugin.
-- The plugin layer (FiatCollateral, AppreciatingFiatCollateral,
-  CTokenFiatCollateral, etc.) has subclass-specific overrides not
-  modeled — the simulation captures the base abstraction only.
-- Oracle layer omitted; `pegPrice` and `low` are passed as inputs.
+| Production state | Purpose | Simulation analog |
+|---|---|---|
+| `NEVER` (uint48 max) | Sentinel "no default risk" value of `_whenDefault` | **`NEVER ✓`** as `2^48 - 1`. |
+| `MAX_DELAY_UNTIL_DEFAULT = 1209600` (2 weeks) | Cap on `delayUntilDefault` constructor arg | **`Valid.t.delay_uint48` ✓** (`<= 1209600`). |
+| `_whenDefault` (uint48) | The encoded status: NEVER → SOUND, > now → IFFY, ≤ now → DISABLED | **`State.whenDefault` ✓** with `Valid.t.wd_uint48`. |
+| `delayUntilDefault` (uint48, immutable) | How long IFFY can persist before DISABLED kicks in | **`State.delayUntilDefault` ✓** (immutable in sim too). |
+| `targetName` (bytes32, immutable) | Canonical name of the target unit (e.g. "USD") | **None.** |
+| `pegBottom`, `pegTop` (uint192, immutable) | Target peg corners | **`State.pegBottom`, `State.pegTop` ✓**. |
+| `savedPegPrice` (uint192) | Cache of last `pegPrice` from oracle | **None** — `pegPrice` passed in as input to `refresh`. |
+| `chainlinkFeed`, `oracleError`, `oracleTimeout`, `priceTimeout` (Asset-inherited) | Oracle wiring | **None.** |
+| `savedLowPrice`, `savedHighPrice`, `lastSave` (Asset-inherited) | Price cache + last-save timestamp; consumed by `IssuancePremium.lastSaveIsNow` | **None.** |
+| `erc20`, `maxTradeVolume` (Asset-inherited) | Token pointer + trade-volume cap | **None.** |
+| `revenueShowing` (uint192, immutable in AppreciatingFiatCollateral) | `FIX_ONE - revenueHiding`; the fraction of refPerTok that's exposed | **`State.revenueShowing ✓`** with `Valid.t.revShow_uint192`. |
+| `exposedReferencePrice` (uint192) | Cached max ref-per-tok seen, monotone-up modulo hard default | **`State.exposedReferencePrice ✓`** with `Valid.t.exposed_uint192`. |
+
+### Operations omitted
+
+| Production function | Effect | Modeled? |
+|---|---|---|
+| `constructor(CollateralConfig)` (FiatCollateral line 64) | Validates targetName, delayUntilDefault, defaultThreshold; computes pegBottom, pegTop | **No.** |
+| `constructor(CollateralConfig, uint192 revenueHiding)` (AppreciatingFiatCollateral line 40) | Adds `require(revenueHiding < FIX_ONE)`; computes `revenueShowing = FIX_ONE - revenueHiding` | **No** — sim treats `revenueShowing` as already-set. |
+| `tryPrice() -> (low, high, pegPrice)` (FiatCollateral line 104, AppreciatingFiatCollateral line 53) | Reads chainlink feed, computes price corners | **No** — sim takes `pegPrice` and `low` as inputs to `refresh`. |
+| `refresh()` (FiatCollateral line 129, AppreciatingFiatCollateral line 79) | Try-catch tryPrice; updates savedLow/High/Peg + lastSave; calls markStatus(IFFY/SOUND) based on peg check; emits CollateralStatusChanged | **`refresh` ✓** at the math/state-machine level. The try-catch around tryPrice (which falls back to IFFY on revert at FiatCollateral line 158, or DISABLED at AppreciatingFiatCollateral line 129), the `lastSave` write, the `savedLowPrice`/`savedHighPrice`/`savedPegPrice` writes, and the `CollateralStatusChanged` event are **unmodeled**. The `high == FIX_MAX → unpriced` branch (FiatCollateral line 138–146) is also unmodeled — sim only consumes `pegPrice` and `low`. |
+| `status() -> CollateralStatus` (FiatCollateral line 168) view | Decodes `_whenDefault` to enum | **`statusOf` ✓**. |
+| `markStatus(CollateralStatus)` (FiatCollateral line 180) internal | The state-update rule — terminal-DISABLED-no-op, IFFY-with-clamp, SOUND-resets | **`markStatus` ✓** line-for-line per the sim header. |
+| `whenDefault()` (FiatCollateral line 201) view | Returns `_whenDefault` | Implicit via record projection. |
+| `refPerTok()` (FiatCollateral line 208 / AppreciatingFiatCollateral line 139) view | Returns FIX_ONE / `exposedReferencePrice` | **No** as an explicit operation; the value is `State.exposedReferencePrice` (or FIX_ONE for fiat). |
+| `targetPerRef()` (FiatCollateral line 213) view | Returns FIX_ONE for fiat; subclass overrides for non-fiat | **No** — sim's `softDefaultStatus` consumes pegPrice directly without invoking targetPerRef. |
+| `isCollateral()` (FiatCollateral line 218) view | Returns true | **No.** |
+| `underlyingRefPerTok()` (AppreciatingFiatCollateral line 145) abstract | Subclass override: actual ref-per-tok before revenue-hiding | **No** as an operation; the value is the `underlying` argument to `updateExposed` / `refresh`. |
+| `claimRewards()` (Asset-inherited) | Subclass-overridable reward-claim entry | **No.** |
+| Subclass-specific overrides (CTokenFiatCollateral, ATokenFiatCollateral, RTokenAsset, etc.) | Plugin-specific underlying reads, reward claims, peg-price overrides | **No.** Sim captures the base FiatCollateral + AppreciatingFiatCollateral abstraction only. |
+
+### What the simulation *does* faithfully model
+
+- The `_whenDefault` sentinel decoding is exact: `wd =? NEVER` → SOUND, `now <? wd` → IFFY, else DISABLED (sim line 76–79).
+- `markStatus` matches FiatCollateral.sol line 180–199 line-for-line: the terminal-DISABLED no-op (`wd <= now → wd`), the SOUND reset (`→ NEVER`), the IFFY clamp (`sum = now + delayUntilDefault`; `sum >= NEVER → NEVER`; `sum < wd → sum`; `else wd`), the DISABLED set (`→ now`).
+- `softDefaultStatus(pegPrice, low, pegBottom, pegTop)` mirrors FiatCollateral line 150 exactly: `pegPrice < pegBottom || pegPrice > pegTop || low == 0` → IFFY, else SOUND.
+- `updateExposed(exposed, underlying, revenueShowing)` mirrors AppreciatingFiatCollateral line 86–96: `underlying < exposed → (underlying, defaulted=true)`, `exposed < hidden → (hidden, false)` where `hidden = underlying * revenueShowing FLOOR`, else `(exposed, false)`.
+- Composition: `refresh` calls `updateExposed`, threads the `defaulted` flag into `markStatus(DISABLED)` (the hard-default branch), then runs `markStatus(softDefaultStatus(...))` on the result. Two sequential `markStatus` calls — exactly what production does (the hard-default `markStatus(DISABLED)` at AppreciatingFiatCollateral line 93, then the soft-default `markStatus(IFFY/SOUND)` inside the inner `try this.tryPrice()` at line 99–124).
+- DISABLED is correctly terminal: once `wd <= now`, `markStatus` is the identity, so the second call cannot un-DISABLE.
+- `Valid.t` carries: uint48 bound on `whenDefault`, uint192 bound on `exposedReferencePrice`, `delayUntilDefault` in `[0, 1209600]`, `revenueShowing` in `[0, FIX_ONE]`.
+
+### Implications for proof transferability
+
+1. The state-machine lemmas (DISABLED is terminal, `markStatus_preserves_validity`, etc.) carry to production directly — they are statements about pure functions that match production line-for-line.
+2. The `tryPrice` try-catch fallback (FiatCollateral line 155–159: empty errData → revert; non-empty → markStatus IFFY) is unmodeled. Production's `refresh` may end up in IFFY due to *any* tryPrice revert (oracle stale, oracle reverted, etc.); sim's `refresh` only goes IFFY through the explicit peg-deviation predicate. Lemmas about IFFY-reachability cover a strict subset of production's reachable states.
+3. The `high == FIX_MAX → unpriced` branch (FiatCollateral line 138–146 — production saves prices iff high ≠ FIX_MAX, and asserts `low == 0` in the unpriced branch) is unmodeled. Sim's `softDefaultStatus` consumes `low = 0` as an IFFY trigger but does not model the asymmetry: production *also* skips the savedLowPrice / savedHighPrice / lastSave writes when unpriced, which the sim has no fields for.
+4. The `lastSave = block.timestamp` write inside `refresh` (production line 142) is the input to `IssuancePremium.lastSaveIsNow`. Sim does not store it; lemmas that compose `Collateral.refresh` with `IssuancePremium.issuancePremium` must thread `lastSaveIsNow` as an external argument.
+5. The most surprising divergence: AppreciatingFiatCollateral's outer `try this.underlyingRefPerTok()` catch at line 126–130 falls through to `markStatus(CollateralStatus.DISABLED)` on revert. Sim's `refresh` accepts `underlying` as an argument and never simulates the revert path — lemmas hold even when production's `underlying` reverts (in which case production goes DISABLED through a different path than the `updateExposed` hard-default branch).
+6. Subclass-specific overrides (e.g. CTokenFiatCollateral's `refPerTok` override that reads from Compound's exchange rate) are entirely unmodeled. The sim captures the base FiatCollateral + AppreciatingFiatCollateral; for any concrete plugin, additional verification is needed to confirm the override preserves the `Valid.t` invariants.
+7. The `revenueShowing` immutability assumption in the sim is faithful for AppreciatingFiatCollateral (production has it `immutable`, line 33). Some non-AppreciatingFiatCollateral subclasses may read revenueShowing from elsewhere — header notes this should be checked per-plugin.
 
 ## IssuancePremium
 
