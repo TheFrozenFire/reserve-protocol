@@ -268,4 +268,59 @@ Lemma W14_payout_changes_rate_discriminate :
   = false.
 Proof. vm_compute. reflexivity. Qed.
 
+(** ===== W15: cancelUnstake_last round-trip exactness at FIX_ONE rate. =====
+    From [unstake_init_storage] (rate = FIX_ONE), unstake then cancel
+    restores totalStRSR and totalRSRStaked exactly to their pre-unstake
+    values. Mirror of [cas/strsr/cancel_unstake.gp] probe (1). *)
+Lemma W15_cancel_round_trip_exact :
+  let s1 := unstake unstake_init_storage cal_unstake_qty 1000 100 in
+  let s2 := cancelUnstake_last s1 in
+  s2.(Storage.totalStRSR) = cal_totalStakes /\
+  s2.(Storage.totalRSRStaked) = cal_totalStakes /\
+  s2.(Storage.draftRSR) = 0 /\
+  s2.(Storage.queue) = [].
+Proof. vm_compute. repeat split; reflexivity. Qed.
+
+(** ===== W16: cancelUnstake_last on an empty queue is identity. =====
+    The boundary case: cancel on a state with no draft entries is a
+    no-op (matches production's [if (endId == 0 || firstId >= endId)
+    return] short-circuit). *)
+Lemma W16_cancel_empty_queue_noop :
+  cancelUnstake_last unstake_init_storage = unstake_init_storage.
+Proof. vm_compute. reflexivity. Qed.
+
+(** ===== W17: cancelUnstake_last on two unstakes pops only the LATEST. =====
+    Two unstakes back-to-back; cancel removes only the second, leaving
+    the first's draft in place. Mirrors [cas/strsr/cancel_unstake.gp]
+    probe (3) (FIFO-then-LIFO mismatch). *)
+Lemma W17_cancel_pops_lifo :
+  let s1 := unstake unstake_init_storage cal_unstake_qty 1000 100 in
+  let s2 := unstake s1 cal_unstake_qty 2000 100 in
+  let s3 := cancelUnstake_last s2 in
+  match s3.(Storage.queue) with
+  | [w] => w.(Withdrawal.availableAt) = 1100
+  | _ => False
+  end.
+Proof. vm_compute. reflexivity. Qed.
+
+(** ===== W18: beginEra zeros stake side, increments era. =====
+    Mirrors production line 695-705. *)
+Lemma W18_beginEra_zeros_stake :
+  let s := beginEra cal_storage in
+  s.(Storage.totalStRSR) = 0 /\
+  s.(Storage.totalRSRStaked) = 0 /\
+  s.(Storage.era) = cal_storage.(Storage.era) + 1 /\
+  s.(Storage.draftRSR) = cal_storage.(Storage.draftRSR).
+Proof. vm_compute. repeat split; reflexivity. Qed.
+
+(** ===== W19: beginDraftEra zeros draft side, increments draftEra. =====
+    Mirrors production line 707-714. *)
+Lemma W19_beginDraftEra_zeros_drafts :
+  let s := beginDraftEra cal_storage in
+  s.(Storage.draftRSR) = 0 /\
+  s.(Storage.queue) = [] /\
+  s.(Storage.draftEra) = cal_storage.(Storage.draftEra) + 1 /\
+  s.(Storage.totalStRSR) = cal_storage.(Storage.totalStRSR).
+Proof. vm_compute. repeat split; reflexivity. Qed.
+
 End StRSRWitnesses.

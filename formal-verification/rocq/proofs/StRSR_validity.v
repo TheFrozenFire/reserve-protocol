@@ -344,4 +344,146 @@ Proof.
       rewrite <- Hweq. simpl. exact HrsrAmt_nn.
 Qed.
 
+(** ===== queue_fifo on rev: popping the back preserves FIFO =====
+
+    If [q] is FIFO-ordered (non-decreasing [availableAt]) and [q = q'
+    ++ [w]] (i.e., [w] is the back entry), then [q'] is also FIFO. *)
+Lemma queue_fifo_removelast
+    (q : list StRSR.Withdrawal.t) (w : StRSR.Withdrawal.t) :
+  StRSR.queue_fifo (q ++ [w]) ->
+  StRSR.queue_fifo q.
+Proof.
+  induction q as [|x rest IH]; intros Hfifo.
+  - simpl. exact I.
+  - destruct rest as [|y rest'] eqn:Erest.
+    + simpl. exact I.
+    + simpl in Hfifo. simpl.
+      change ((x :: y :: rest') ++ [w]) with (x :: ((y :: rest') ++ [w])) in Hfifo.
+      change (StRSR.queue_fifo (x :: ((y :: rest') ++ [w])))
+        with (x.(StRSR.Withdrawal.availableAt) <=
+              (match (y :: rest') ++ [w] with
+               | [] => x
+               | w' :: _ => w'
+               end).(StRSR.Withdrawal.availableAt) /\
+              StRSR.queue_fifo ((y :: rest') ++ [w]))
+        in Hfifo.
+      destruct Hfifo as [Hxy Hrest].
+      change ((y :: rest') ++ [w]) with (y :: (rest' ++ [w])) in Hxy.
+      simpl in Hxy.
+      split.
+      * exact Hxy.
+      * apply IH. exact Hrest.
+Qed.
+
+(** ===== sum_rsr_amounts on rev: a snoc accounting helper =====
+
+    Convenience wrapper of [sum_rsr_amounts_snoc] re-stating the
+    decomposition for [rev (w :: rev_rest) = (rev rev_rest) ++ [w]]. *)
+Lemma sum_rsr_amounts_app
+    (q1 q2 : list StRSR.Withdrawal.t) :
+  StRSR.sum_rsr_amounts (q1 ++ q2)
+    = StRSR.sum_rsr_amounts q1 + StRSR.sum_rsr_amounts q2.
+Proof.
+  induction q1 as [|x rest IH]; simpl.
+  - lia.
+  - rewrite IH. lia.
+Qed.
+
+(** ===== cancelUnstake_last_preserves_validity =====
+
+    [cancelUnstake_last] pops the back of the queue (the most recently
+    enqueued entry) and re-stakes its [rsrAmount] at the current
+    exchange rate. Validity preservation cases on whether the queue is
+    empty (no-op) or non-empty (one-step LIFO pop).
+
+    Field-by-field:
+      - [totalStRSR_nonneg]   genesis branch: minted = rsrAmount >= 0
+                              (entries are non-negative). Active
+                              branch: minted = floor(rsrAmount * FIX_ONE
+                              / rate) >= 0 by FLOOR-divrnd of
+                              non-negative by non-negative.
+      - [totalRSRStaked_nonneg] adds rsrAmount >= 0 to a non-negative
+                              field.
+      - [rewards_nonneg]      unchanged.
+      - [ratio_in_range]      unchanged.
+      - [queue_ordered]       removing the last entry of a FIFO-ordered
+                              list keeps it FIFO ([queue_fifo_removelast]).
+      - [draftRSR_nonneg]     draftRSR >= sum_rsr_amounts queue >=
+                              rsrAmount, so draftRSR - rsrAmount >= 0.
+      - [queue_drafts_le_draftRSR] sum_rsr_amounts (q' ++ [w]) =
+                              sum(q') + rsrAmount, so post-cancel
+                              sum(q') = sum(full queue) - rsrAmount
+                              <= draftRSR - rsrAmount. *)
+
+Lemma cancelUnstake_last_preserves_validity
+    (s : StRSR.Storage.t) :
+  StRSR.Valid.t s ->
+  StRSR.Valid.t (StRSR.cancelUnstake_last s).
+Proof.
+  intros Hv. pose proof Hv as Hv0.
+  destruct Hv as [Hst Hstk Hrew Hratio Hfifo Hdr Hcons Hent].
+  unfold StRSR.cancelUnstake_last.
+  destruct (List.rev s.(StRSR.Storage.queue)) as [|w rest_rev] eqn:Erev.
+  - (* empty rev -> queue is empty -> no-op *)
+    exact Hv0.
+  - (* non-empty rev: w is the original back of the queue *)
+    set (qFront := List.rev rest_rev).
+    (* From [rev queue = w :: rest_rev], the original queue is
+       [rev (w :: rest_rev)] = [(rev rest_rev) ++ [w]] = [qFront ++ [w]]. *)
+    assert (Hqdecomp : s.(StRSR.Storage.queue) = qFront ++ [w]).
+    { unfold qFront.
+      replace s.(StRSR.Storage.queue) with (List.rev (List.rev s.(StRSR.Storage.queue))).
+      - rewrite Erev. simpl. reflexivity.
+      - apply List.rev_involutive.
+    }
+    assert (HwIn : List.In w s.(StRSR.Storage.queue)).
+    { rewrite Hqdecomp. apply List.in_or_app. right. simpl. left. reflexivity. }
+    assert (HwNN : 0 <= w.(StRSR.Withdrawal.rsrAmount)) by (apply Hent; exact HwIn).
+    assert (HfrontIn : forall w', List.In w' qFront ->
+                                  List.In w' s.(StRSR.Storage.queue)).
+    { intros w' Hin'. rewrite Hqdecomp. apply List.in_or_app. left. exact Hin'. }
+    assert (HfrontNN : forall w', List.In w' qFront ->
+                                  0 <= w'.(StRSR.Withdrawal.rsrAmount))
+      by (intros w' Hin'; apply Hent; apply HfrontIn; exact Hin').
+    assert (HfrontFIFO : StRSR.queue_fifo qFront).
+    { rewrite Hqdecomp in Hfifo. apply (queue_fifo_removelast qFront w Hfifo). }
+    assert (HsumDecomp :
+              StRSR.sum_rsr_amounts s.(StRSR.Storage.queue) =
+              StRSR.sum_rsr_amounts qFront + w.(StRSR.Withdrawal.rsrAmount)).
+    { rewrite Hqdecomp. apply sum_rsr_amounts_snoc. }
+    assert (HsumFront_nn : 0 <= StRSR.sum_rsr_amounts qFront)
+      by (apply sum_rsr_amounts_nonneg; exact HfrontNN).
+    assert (HwLeDR : w.(StRSR.Withdrawal.rsrAmount) <= s.(StRSR.Storage.draftRSR))
+      by lia.
+    set (minted :=
+      if s.(StRSR.Storage.totalStRSR) =? 0 then
+        w.(StRSR.Withdrawal.rsrAmount)
+      else
+        FixLib.divrnd (w.(StRSR.Withdrawal.rsrAmount) * StRSR.FIX_ONE_Z)
+                      (StRSR.exchange_rate s) RoundingMode.FLOOR).
+    assert (Hminted_nn : 0 <= minted).
+    { unfold minted.
+      destruct (s.(StRSR.Storage.totalStRSR) =? 0) eqn:Heq.
+      - exact HwNN.
+      - apply divrnd_nonneg_floor.
+        + apply Z.mul_nonneg_nonneg; [exact HwNN|].
+          unfold StRSR.FIX_ONE_Z, FixLib.FIX_ONE, FixLib.FIX_SCALE. lia.
+        + apply exchange_rate_nonneg. exact Hv0.
+    }
+    constructor; simpl.
+    + (* totalStRSR + minted >= 0 *)
+      lia.
+    + (* totalRSRStaked + rsrAmount >= 0 *)
+      lia.
+    + exact Hrew.
+    + exact Hratio.
+    + exact HfrontFIFO.
+    + (* draftRSR - rsrAmount >= 0 *)
+      lia.
+    + (* sum_rsr_amounts qFront <= draftRSR - rsrAmount *)
+      lia.
+    + (* every entry in qFront has rsrAmount >= 0 *)
+      exact HfrontNN.
+Qed.
+
 End StRSRValidity.
