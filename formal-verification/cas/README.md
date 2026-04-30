@@ -13,9 +13,11 @@ Run the suite:
 
 Each script is self-contained. `gp -q < script.gp` runs one in isolation.
 
-## Why CAS in addition to FV?
+## Why CAS in addition to Rocq?
 
-- **Rocq layer** (planned): proves logical soundness of the Reserve math.
+- **Rocq layer** (`../rocq/`): proves logical soundness of the Reserve
+  math. Per-domain Gallina simulations, invariant lemmas, validity
+  preservation, and a system-level joint bound — see `../rocq/README.md`.
 - **CAS layer** (here): validates that the model the Rocq proof reasons
   about matches the production contract's semantics, by exact-rational
   computation over calibrated inputs.
@@ -23,7 +25,9 @@ Each script is self-contained. `gp -q < script.gp` runs one in isolation.
 These cover orthogonal failure modes: a Rocq proof can be impeccable yet
 verifying the wrong model; a CAS sweep can catch boundary anomalies before
 any proof is attempted. Together they bracket the same claim from two
-sides.
+sides. The `_xcheck.v` and `_witnesses.v` files under `../rocq/proofs/`
+pin specific CAS-found values as `vm_compute; reflexivity` theorems —
+numerical drift between the layers fails the build.
 
 ## Coverage
 
@@ -52,6 +56,80 @@ sides.
 | File | Probes |
 |------|--------|
 | `exchange_rate_evolution.gp` | Stake invariant `stakeRSR * stakeRate ≥ totalStakes * FIX_ONE`, era-reset trigger (boundary at `newRSR ≤ 1e15` wei), compound-payout identity `1 - (1-r)^N` ≡ geometric pool decay (verified zero wei difference at N=10). |
+| `withdrawal_queue.gp` | FIFO ordering of unstake withdrawals; `stakeRSR + queueRSR` conservation across unstake; round-trip exactness for stake → unstake at fixed exchange rate. |
+
+### `furnace/` — Furnace melt curve
+
+| File | Probes |
+|------|--------|
+| `melt_curve.gp` | Compound-payout identity for the RToken burn rate: `payoutAmount = bal * (1 - (1-r)^N)` matches geometric pool decay; `payoutRatio ≤ FIX_ONE` cap; verified to within 9.7e-16 relative error vs analytic geometric simulation. |
+
+### `distributor/` — revenue split conservation
+
+| File | Probes |
+|------|--------|
+| `share_conservation.gp` | `sum(transferAmts) + dust = amount` exactly across canonical Reserve distribution tables, prime-share dust calculations, and boundary cases (single destination, all-zero shares, sub-totalShares amounts). |
+
+### `trade_lib/` — buyAmount and slippage
+
+| File | Probes |
+|------|--------|
+| `slippage_sufficiency.gp` | `buyAmount` lower-bound holds across the slippage range \[0%, FIX_ONE); calibrated against canonical (sellLow, buyHigh) inputs. |
+| `ceil_rounding_witness.gp` | The Certora #1283 mitigation witness: post-fix `buyAmount` strictly exceeds the pre-fix value at canonical inputs by exactly 1 wei. |
+
+### `dutch_trade/` — Dutch auction price decay
+
+| File | Probes |
+|------|--------|
+| `price_decay.gp` | Phase-by-phase price-decay schedule (phase 1 starts at ~1000× best price, phase 4 saturates at worst); `bidPrice` boundaries at progression 20%/45%/95%/100%. |
+| `bid_rounding.gp` | FLOOR vs CEIL `bidAmount_at_price` divergence at minimum-price 6-decimal (USDC) and 18-decimal scenarios; the gap is bounded by 1 wei but the rounding direction must favor the seller. |
+
+### `gnosis_trade/` — auction settlement
+
+| File | Probes |
+|------|--------|
+| `min_buy_amount.gp` | `worstCasePrice` calculations across canonical (mba, sa) inputs; section (6) characterizes the **governance-conditional auction-fee gap** — when `feeNumerator > 0`, the effective ratio diverges from `worstCasePrice` by a deterministic monotone amount. |
+| `settlement_floor.gp` | `settlement_floor` computation; `canSettle` boundary witnesses (inclusive boundary, +1 pad absorbs minBuy-1, exhausts at minBuy-2); cancellationEndTime offset behavior. |
+
+### `basket_handler/` — quote rounding
+
+| File | Probes |
+|------|--------|
+| `quote_rounding_direction.gp` | FLOOR vs CEIL `quote_one` divergence at non-exact-divides; the gap is bounded by 1 wei and CEIL is required to match production. |
+| `quote_round_trip.gp` | `quote → redeem` round-trip identity at `refPerTok = FIX_ONE`; lossy non-extraction at sub-basket amounts; linearity of `quoteQuantities` in baskets. |
+
+### `backing_manager/` — forwardRevenue accounting
+
+| File | Probes |
+|------|--------|
+| `forward_revenue_conservation.gp` | `computeSurplusSplit` outputs (`rsrAmount + rTokenAmount + dust = delta`) at canonical (delta, totalShares) inputs, including off-by-multiple cases. |
+| `backing_buffer_ceil_witness.gp` | Certora-audited buffer math `needed = basketsNeeded.mul(FIX_ONE + backingBuffer, CEIL)`; pinpoints the smallest input where CEIL strictly exceeds FLOOR (the post-#1283 mitigation surface). |
+
+### `collateral/` — status state machine and refPerTok monotonicity
+
+| File | Probes |
+|------|--------|
+| `status_state_machine.gp` | SOUND ↔ IFFY ↔ DISABLED transitions across `softDefault` / `hardDefault` / `cure` paths; DISABLED is terminal; IFFY → DISABLED after `delayUntilDefault`. |
+| `ref_per_tok_monotonicity.gp` | Cached `refPerTokMax` is non-decreasing across `refresh` calls; underlying refPerTok dropping below cached max triggers hard default. |
+
+### `issuance_premium/` — under-peg premium curve
+
+| File | Probes |
+|------|--------|
+| `premium_curve.gp` | Premium values at canonical RToken-deployment peg points (USDC at 0.99/0.95, FRAX at 0.998, LUSD at 0.995); saturation at FIX_MAX; fall-through paths when `enable=false` or `lastSave` is stale. |
+
+### `deprecation/` — RToken deprecation script audit
+
+| File | Probes |
+|------|--------|
+| `rtoken_deprecation.gp` | Discovered the **PR #1285 sequencing bug**: `setDistribution(FURNACE, (0,0))` before `setDistribution(ST_RSR, (0, 10000))` reverts because the intermediate state has cumulative `rTokenDist = 0 < MAX_DISTRIBUTION = 10000`. Pinned as a Rocq counterexample theorem in `../rocq/proofs/Distributor_deprecation_bug.v`. |
+
+### `rebalance/` (additional)
+
+| File | Probes |
+|------|--------|
+| `noise_bound_tightness.gp` | Tightness analysis of the `roundingNoise` heuristic across calibrated parameter grids; identifies grid points where the bound is loose by orders of magnitude. |
+| `basket_range_simulation.gp` | Numerical `basketRange` simulation at calibration matching the on-chain RebalancingLib computation. |
 
 ## Adding a new script
 

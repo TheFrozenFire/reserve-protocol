@@ -1,27 +1,78 @@
 #!/usr/bin/env bash
 # Build the Reserve formal-verification Rocq tree natively (no Docker).
 # Compiles simulations, proofs, and cross-checks against the native
-# rocq-of-solidity library at ~/git/reserve/_tools/rocq-of-solidity.
+# rocq-of-solidity library.
 #
 # Prereqs (one-time):
-#   opam switch rocq820 with:
-#     coq.8.20.1, coq-hammer-tactics, coq-coqutil, coq-record-update
-#   Compiled rocq-of-solidity tree (run `make all` in
-#     ~/git/reserve/_tools/rocq-of-solidity/rocq/RocqOfSolidity once).
+#
+# 1. An opam switch with Coq 8.20.1 and the proof dependencies:
+#
+#      opam switch create rocq820 ocaml-base-compiler.4.14.1
+#      opam repo add coq-released https://coq.inria.fr/opam/released
+#      opam install coq.8.20.1 coq-hammer-tactics coq-coqutil coq-record-update
+#
+# 2. A compiled rocq-of-solidity tree. Clone and build the upstream:
+#
+#      git clone https://github.com/formal-land/rocq-of-solidity \
+#        ~/git/reserve/_tools/rocq-of-solidity
+#      cd ~/git/reserve/_tools/rocq-of-solidity/rocq/RocqOfSolidity
+#      eval "$(opam env --switch=rocq820 --set-switch)"
+#      make all
+#
+# Override locations via env vars if your layout differs:
+#
+#      ROCQ_TREE=/path/to/rocq-of-solidity \
+#      PROTOCOL_TREE=/path/to/this/repo \
+#        bash scripts/rocq-build
 #
 # Note: Docker (rocq-build:full image) is still required for solc-rocq
-# auto-translation runs, but no longer for proof compilation.
+# auto-translation runs (see scripts/solc-rocq), but not for proof
+# compilation.
 #
 # Usage: bash scripts/rocq-build [<file.v> ...]
 #   With no args, compiles all .v files listed in rocq/_RocqProject in order.
 
 set -euo pipefail
 
+# Default to a sibling layout under ~/git/reserve/, but accept overrides.
 ROCQ_TREE="${ROCQ_TREE:-$HOME/git/reserve/_tools/rocq-of-solidity}"
-PROTOCOL_TREE="${PROTOCOL_TREE:-$HOME/git/reserve/protocol}"
+# PROTOCOL_TREE defaults to two levels up from this script.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROTOCOL_TREE="${PROTOCOL_TREE:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 RESERVE_ROCQ="$PROTOCOL_TREE/formal-verification/rocq"
 
+# Sanity-check the prereqs and emit actionable errors.
+if [[ ! -d "$ROCQ_TREE/rocq/RocqOfSolidity" ]]; then
+  cat >&2 <<EOF
+error: rocq-of-solidity not found at:
+  $ROCQ_TREE/rocq/RocqOfSolidity
+
+Set ROCQ_TREE to its parent or clone it via:
+  git clone https://github.com/formal-land/rocq-of-solidity "\$ROCQ_TREE"
+EOF
+  exit 2
+fi
+
+if [[ ! -f "$ROCQ_TREE/rocq/RocqOfSolidity/RocqOfSolidity.vo" ]]; then
+  cat >&2 <<EOF
+error: rocq-of-solidity is not built. Run:
+  cd "$ROCQ_TREE/rocq/RocqOfSolidity" && eval "\$(opam env --switch=rocq820 --set-switch)" && make all
+EOF
+  exit 3
+fi
+
 eval "$(opam env --switch=rocq820 --set-switch)"
+
+if ! command -v coqc >/dev/null 2>&1; then
+  cat >&2 <<EOF
+error: coqc not found on PATH after opam env load.
+Did you create the rocq820 switch? Run:
+  opam switch create rocq820 ocaml-base-compiler.4.14.1
+  opam repo add coq-released https://coq.inria.fr/opam/released
+  opam install coq.8.20.1 coq-hammer-tactics coq-coqutil coq-record-update
+EOF
+  exit 4
+fi
 
 if [[ $# -eq 0 ]]; then
   files=()

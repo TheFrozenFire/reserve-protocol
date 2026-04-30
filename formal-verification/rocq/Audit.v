@@ -48,6 +48,7 @@ Require Import Reserve.proofs.Collateral_validity.
 
 (* Section 7 - System-level. *)
 Require Import Reserve.proofs.EndToEnd_strengthened.
+Require Import Reserve.proofs.EndToEnd_complete.
 
 (** ============================================================
     Section 1 - Bug findings.
@@ -189,16 +190,36 @@ Notation audit_refresh_preserves_validity :=
 (** ============================================================
     Section 7 - System-level.
 
-    The end-to-end strengthened theorem composes all per-domain
-    uint256 bounds: across the eight storage-state domains modelled
-    in the tree, the sum of all 34 uint256-typed scalar fields is
-    bounded by [34 * UINT256_MAX]. This is the cross-domain
-    no-overflow witness.
+    Two cross-domain no-overflow theorems compose the per-domain
+    uint256 bounds across the formalization tree.
+
+    The headline claim ([all_domain_outputs_jointly_bounded]) covers
+    all 13 domains: 8 with storage-state Valid + InputBounded
+    predicates, plus 5 purely-functional domains whose call-site
+    envelope hypotheses are taken as explicit antecedents. The sum
+    is bounded by [43 * UINT256_MAX].
+
+    [audit_endtoend_storage_jointly_bounded] is the storage-only
+    sub-theorem (8 domains, 34 scalars, [34 * UINT256_MAX]); it is
+    re-exported here for callers that don't have the per-call
+    arguments to discharge the functional-domain envelopes.
     ============================================================ *)
 
-(** Sum of all 34 uint256 storage scalars across the eight modelled
-    domains (Throttle, Furnace, StRSR, Collateral, DutchTrade,
-    Rebalance inputs, BackingManager BasketState and SurplusSplit)
-    is bounded by [34 * UINT256_MAX]. *)
+(** Headline: all 13 domains jointly bounded.
+
+    Composes 8 storage-state domains (Throttle, Furnace, StRSR,
+    Collateral, DutchTrade, Rebalance, BackingManager BasketState,
+    BackingManager SurplusSplit) with 5 functional domains (TradeLib
+    output pair, IssuancePremium I/O triple, GnosisTrade output pair,
+    BasketHandler single-asset quote, Distributor amount). Sum of
+    all uint256 fields and call inputs is bounded by [43 * UINT256_MAX]. *)
 Notation audit_endtoend_jointly_bounded :=
+  EndToEndComplete.all_domain_outputs_jointly_bounded.
+
+(** Sub-theorem: storage-state-only joint bound.
+
+    Sum of the 34 uint256 storage scalars across the 8 storage-state
+    domains is bounded by [34 * UINT256_MAX]. Use this when the call
+    arguments to the 5 functional domains aren't in scope. *)
+Notation audit_endtoend_storage_jointly_bounded :=
   EndToEndStrengthened.all_domain_scalars_jointly_bounded.
