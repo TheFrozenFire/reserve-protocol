@@ -1,9 +1,5 @@
 name: Formal verification
 
-# Manual trigger only for now. The proof tree compiles in ~5-10 min on a
-# free-tier GitHub-hosted runner; the CAS suite runs in <30 sec. Add an
-# `on: pull_request` trigger that watches `formal-verification/**` if you
-# want it to gate merges.
 on:
   workflow_dispatch:
 
@@ -21,11 +17,6 @@ jobs:
         with:
           repository: formal-land/rocq-of-solidity
           path: _tools/rocq-of-solidity
-          # We do not pin a SHA: no specific upstream rev has been
-          # validated as known-good against the current proof tree.
-          # Failures from upstream drift will surface as workflow
-          # failures and should prompt either a SHA pin here or an
-          # update to the proof tree to match new upstream APIs.
           ref: main
 
       - name: Set up OCaml
@@ -37,8 +28,6 @@ jobs:
             coq-released: https://coq.inria.fr/opam/released
 
       - name: Install Coq + proof dependencies
-        # All package versions pinned to the exact set this proof
-        # tree was authored against. Bump deliberately, not by drift.
         run: |
           opam install -y \
             coq.8.20.1 \

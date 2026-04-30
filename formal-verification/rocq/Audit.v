@@ -1,23 +1,10 @@
 (** * Audit.v - Decision-relevant theorem index.
 
-    This file is the human-readable handoff for auditors and reviewers
-    of the Reserve Protocol formal-verification tree. The full tree
-    contains 800+ lemmas across 100+ files; this index re-exports the
-    load-bearing claims under audit-friendly names so that reviewing
-    the safety story does not require navigating the tree.
-
-    Reading guide:
-      - Each [Theorem audit_*] below is a re-export of a single
-        existing lemma. No new proofs live here.
-      - Section comments describe the threat or property the group
-        addresses. Per-theorem comments describe the claim and why
-        it matters.
-      - Compile time is dominated by transitive imports of the
-        underlying proof modules; the body of this file is just
-        definitional re-exports and adds no proof obligations.
-
-    To inspect a claim in detail, jump from the [:=] right-hand side
-    back to its source file under [proofs/].
+    Re-exports the load-bearing theorems from the proof tree under
+    audit-friendly names, organized into sections by the property or
+    threat each group addresses. To inspect a claim in detail, jump
+    from the [:=] right-hand side back to its source file under
+    [proofs/]. No new proofs live in this file.
 
     --------------------------------------------------------------- *)
 

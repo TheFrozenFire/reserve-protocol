@@ -10,14 +10,14 @@
          which case it inherits validity from [Valid.throttle t].
 
       2. [lastAvailable'] fits in uint256. The new value is bounded above by
-         [currentlyAvailable + |amount|]. The cleanest precondition is to
-         take that bound directly: it's the on-chain reality (lastAvailable
-         is a uint256 that the contract refuses to overflow), and deriving
-         it from supply / amount bounds individually would require a
-         hourlyLimit-bound lemma we don't have here.
+         [currentlyAvailable + |amount|]. We take that bound directly as a
+         precondition; on chain it is enforced by the contract refusing to
+         let lastAvailable overflow. Deriving it from supply and amount
+         bounds individually would require a hourlyLimit-bound lemma not
+         present in this tree.
 
       3. [params] are unchanged in every branch, so their validity transfers
-         trivially via the original [Valid.throttle t] hypothesis.
+         from the original [Valid.throttle t] hypothesis.
 *)
 
 Require Import RocqOfSolidity.RocqOfSolidity.

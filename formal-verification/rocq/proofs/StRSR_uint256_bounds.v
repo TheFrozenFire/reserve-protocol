@@ -15,8 +15,8 @@
     natural input-history hypotheses, and deriving the per-field
     [<= UINT256_MAX] bounds that [EndToEnd.v] needed.
 
-    Design choice: [InputBounded] tracks the three uint256-typed scalar
-    fields whose upper bound EndToEnd.v could not previously establish:
+    [InputBounded] tracks the three uint256-typed scalar fields whose
+    upper bound is not derivable from [Valid.t] alone:
 
       - [totalStRSR]
       - [totalRSRStaked]

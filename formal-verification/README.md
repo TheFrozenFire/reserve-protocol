@@ -25,7 +25,7 @@ This pattern transfers cleanly to smart contract math because:
 | FixLib (`Fixed.sol`) | ✓ | ✓✓ | Pure functions; CAS sweeps boundary corpora trivially. Complements the Certora FixLib audit on master. |
 | Throttle (`Throttle.sol`) | ✓ | ✓ | State machine over time; Rocq for the invariants, CAS for overflow analysis and time monotonicity. |
 | Furnace, StRSR | ✓ | ✓ | Compound-payout identity `1 - (1-r)^N`; CAS validates against geometric simulation. |
-| Rebalance / RebalancingLib | ✓ | ✓✓ | Fuzz harness is currently fighting hand-tuned rounding bound; CAS surfaces the closed form, Rocq proves it. |
+| Rebalance / RebalancingLib | ✓ | ✓✓ | Basket-range rounding bounds: CAS surfaces the closed form, Rocq proves it. |
 | Distributor share splits | ✓ | ✓ | Share-conservation under arbitrary distributions. |
 | BackingManager state machine | ✓✓ | – | Cross-component lifecycle invariants — Rocq territory. |
 | Reentrancy / access control | ✓✓ | – | Control-flow, not algebraic. CAS doesn't see call stacks. |

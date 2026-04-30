@@ -1,33 +1,21 @@
-(** System-level end-to-end joint-bound theorem (initial 3-domain version).
+(** System-level end-to-end joint-bound theorem — 3-domain version.
 
-    This file is the **first** of three system-level joint-bound
-    theorems in the tree. They form a progression of strengthening
-    cross-domain compositions:
+    Three system-level joint-bound theorems in the tree, by domain
+    coverage:
 
-      1. [EndToEnd.v]              - 3 storage domains  (this file)
-                                     Throttle + Furnace + StRSR ratio
-                                     Bound: [<= 5 * UINT256_MAX]
+      [EndToEnd.v]              - 3 domains  (this file)
+                                  Throttle + Furnace + StRSR ratio
+                                  Bound: [<= 5 * UINT256_MAX]
 
-      2. [EndToEnd_strengthened.v] - 8 storage-state domains
-                                     Adds Collateral, DutchTrade, Rebalance,
-                                     and BackingManager (BasketState +
-                                     SurplusSplit), with Furnace and StRSR
-                                     contributions widened.
-                                     Bound: [<= 34 * UINT256_MAX]
+      [EndToEnd_strengthened.v] - 8 storage-state domains
+                                  Bound: [<= 34 * UINT256_MAX]
 
-      3. [EndToEnd_complete.v]     - all 13 domains (8 storage + 5 functional)
-                                     Adds the call-arg-bounded functional
-                                     domains (TradeLib, IssuancePremium,
-                                     GnosisTrade, BasketHandler, Distributor)
-                                     via explicit envelope hypotheses.
-                                     Bound: [<= 43 * UINT256_MAX]
+      [EndToEnd_complete.v]     - all 13 domains (8 storage + 5 functional)
+                                  Bound: [<= 43 * UINT256_MAX]
 
-    The [Audit.v] handoff index re-exports [EndToEnd_complete] as the
-    headline [audit_endtoend_jointly_bounded] and this file's three
-    domains as [audit_endtoend_storage_jointly_bounded]'s strict
-    subset. The [_strengthened] variant is the right intermediate
-    handle for callers that have storage states but no per-call
-    arguments to discharge functional-domain envelopes.
+    [Audit.v] re-exports [EndToEnd_complete] as the headline
+    [audit_endtoend_jointly_bounded] and [EndToEnd_strengthened] as
+    [audit_endtoend_storage_jointly_bounded].
 
     --------------------------------------------------------------- *)
 
