@@ -5,7 +5,7 @@
 // from formal-verification/cas/<domain>/<script>.gp.
 
 import { expect } from 'chai'
-import { BigNumber, ContractFactory } from 'ethers'
+import { ContractFactory } from 'ethers'
 import { ethers } from 'hardhat'
 
 import { bn, fp } from '../../common/numbers'
@@ -36,23 +36,12 @@ describe('CAS regression corpus', () => {
   // Source: cas/fixlib/safe_muldiv_certora_witness.gp
   it('FixLib.safeMulDiv saturates at FIX_MAX on minimum-overflow inputs', async () => {
     // Minimum-overflow class: a*b/c == FIX_MAX + 1 (single-bit overshoot).
-    expect(
-      await caller.safeMulDiv(bn(2).pow(96), bn(2).pow(96), bn(1), CEIL)
-    ).to.equal(FIX_MAX)
-    expect(
-      await caller.safeMulDiv(bn(2).pow(96), bn(2).pow(97), bn(2), CEIL)
-    ).to.equal(FIX_MAX)
-    expect(
-      await caller.safeMulDiv(bn(2).pow(96), bn(2).pow(98), bn(4), CEIL)
-    ).to.equal(FIX_MAX)
+    expect(await caller.safeMulDiv(bn(2).pow(96), bn(2).pow(96), bn(1), CEIL)).to.equal(FIX_MAX)
+    expect(await caller.safeMulDiv(bn(2).pow(96), bn(2).pow(97), bn(2), CEIL)).to.equal(FIX_MAX)
+    expect(await caller.safeMulDiv(bn(2).pow(96), bn(2).pow(98), bn(4), CEIL)).to.equal(FIX_MAX)
     // Audit's original regression input: a=2^191+1, b=2^192-2, c=2^127.
     expect(
-      await caller.safeMulDiv(
-        bn(2).pow(191).add(1),
-        bn(2).pow(192).sub(2),
-        bn(2).pow(127),
-        CEIL
-      )
+      await caller.safeMulDiv(bn(2).pow(191).add(1), bn(2).pow(192).sub(2), bn(2).pow(127), CEIL)
     ).to.equal(FIX_MAX)
   })
 
@@ -61,9 +50,7 @@ describe('CAS regression corpus', () => {
     expect(await caller.safeDiv(FIX_MAX, FIX_ONE, ROUND)).to.equal(FIX_MAX)
     expect(await caller.safeDiv(FIX_MAX, FIX_ONE.mul(2), ROUND)).to.equal(FIX_MAX)
     expect(await caller.safeDiv(FIX_MAX, FIX_ONE.mul(100), ROUND)).to.equal(FIX_MAX)
-    expect(
-      await caller.safeDiv(FIX_MAX, FIX_ONE.mul(1_000_000_000), ROUND)
-    ).to.equal(FIX_MAX)
+    expect(await caller.safeDiv(FIX_MAX, FIX_ONE.mul(1_000_000_000), ROUND)).to.equal(FIX_MAX)
   })
 
   // Source: cas/fixlib/mul_rounding_direction.gp
@@ -109,7 +96,7 @@ describe('CAS regression corpus', () => {
     // CAS-derived expected value: 99.9823189...% of FIX_ONE. Exact match against
     // the production solc; if a future solc/optimizer change shifts this even by
     // one wei the test fails and we want to investigate, not paper over.
-    const expected = BigNumber.from('999823189501488433')
+    const expected = bn('999823189501488433')
     expect(payoutRatio).to.equal(expected)
   })
 
@@ -135,5 +122,4 @@ describe('CAS regression corpus', () => {
     // Dust is bounded by totalShares.
     expect(amount.sub(rTokenAmount.add(rsrAmount)).lt(totalShares)).to.equal(true)
   })
-
 })

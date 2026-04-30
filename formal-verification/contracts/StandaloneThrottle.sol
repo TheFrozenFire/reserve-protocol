@@ -10,7 +10,7 @@ pragma solidity ^0.8.28;
 /// pragma-relaxed copy of the production libs (or rebuild rocq-of-solidity
 /// at version 0.8.28), we'll point ThrottleHarness.sol at the real source.
 contract StandaloneThrottle {
-    uint48 constant ONE_HOUR = 3600;
+    uint48 internal constant ONE_HOUR = 3600;
 
     struct Throttle {
         uint256 amtRate;

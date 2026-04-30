@@ -39,7 +39,9 @@ contract BackingManagerMathHarness {
 
     /// Computes basket-buffer adjustment + needed quantity. Mirrors lines 220-225
     /// of BackingManagerP1::forwardRevenue.
-    function computeNewBasketsAndNeeded(uint192 _basketsHeldBottom, uint192 _basketsNeeded) external {
+    function computeNewBasketsAndNeeded(uint192 _basketsHeldBottom, uint192 _basketsNeeded)
+        external
+    {
         basketsHeldBottom = _basketsHeldBottom;
         basketsNeeded = _basketsNeeded;
         uint192 baskets = FixLib.div(_basketsHeldBottom, uint192(1e18) + backingBuffer);
@@ -56,7 +58,13 @@ contract BackingManagerMathHarness {
     /// Computes the per-asset surplus split for a single asset. Mirrors lines
     /// 240-260. Stores the split rather than returning it to fit the working
     /// harness shape.
-    function computeSurplusSplit(uint192 _quantity, uint192 _bal, uint8 _decimals, uint256 _rTokenTotal, uint256 _rsrTotal) external {
+    function computeSurplusSplit(
+        uint192 _quantity,
+        uint192 _bal,
+        uint8 _decimals,
+        uint256 _rTokenTotal,
+        uint256 _rsrTotal
+    ) external {
         quantity = _quantity;
         bal = _bal;
         assetDecimals = _decimals;

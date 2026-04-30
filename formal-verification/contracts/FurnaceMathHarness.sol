@@ -42,7 +42,10 @@ contract FurnaceMathHarness {
         if (uint48(block.timestamp) < uint64(lastPayout + 1)) return;
 
         uint48 numPeriods = uint48((block.timestamp) - lastPayout);
-        uint192 payoutRatio = FixLib.minus(uint192(1e18), FixLib.powu(FixLib.minus(uint192(1e18), ratio), numPeriods));
+        uint192 payoutRatio = FixLib.minus(
+            uint192(1e18),
+            FixLib.powu(FixLib.minus(uint192(1e18), ratio), numPeriods)
+        );
         uint256 amount = FixLib.mulu_toUint(payoutRatio, lastPayoutBal);
 
         lastPayout += numPeriods;
