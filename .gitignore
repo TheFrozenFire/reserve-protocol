@@ -43,3 +43,19 @@ backtests/
 
 # output files
 output.log
+
+# Rocq / Coq build artifacts
+*.vo
+*.vok
+*.vos
+*.glob
+*.aux
+.lia.cache
+.nia.cache
+_CoqProject
+RocqMakefile
+RocqMakefile.conf
+
+# qemu emulation crash dumps from solc-rocq build
+core
+qemu_*_*.core
