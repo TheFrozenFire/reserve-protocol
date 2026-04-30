@@ -620,61 +620,100 @@ sell-amount cap.
 5. The most surprising divergence is the asymmetry between `buyAmount` and `coverDeficitSellAmount` modeling. Both are kernels — but `coverDeficitSellAmount` is the *inner* kernel of `prepareTradeToCoverDeficit`, and `prepareTradeToCoverDeficit` then calls `prepareTradeSell` recursively (production line 148). The sim cannot express that recursive composition; lemmas about `coverDeficitSellAmount` are statements about one half of one branch of the trade-prep tree.
 6. The `buyAmount`/`buyAmountPre` rounding-direction CAS witness (`cas/trade_lib/ceil_rounding_witness.gp`) pairs with the simulation lemmas to give the slippage-sufficiency proof its strength. The CAS scripts compute exact rationals where the sim works in `Z`; together they cover the rounding question without modeling overflow.
 
-## BasketHandler
+## BasketHandler (gold-standard audit)
 
-**Quote math + basket-state lifecycle.** Two layers:
-- **Layer 1 — Quote math kernel.** `quote_one`, `quote`,
-  `quoteQuantities`, `redeem_one` over the live `Basket` (list of
-  `(asset, refAmt)`).
-- **Layer 2 — Basket-state lifecycle.** `setPrimeBasket`,
-  `refreshBasket` operate on a `Storage` record `{basket, primeBasket,
-  backupConfigs, nonce, disabled}`, mirroring production
-  `BasketHandlerP1`'s state. The previous `Definition Storage : Set
-  := list BasketEntry.t` is renamed to `Definition Basket` so existing
-  proofs about quote semantics carry over without churn.
+The simulation captures **two layers**: (1) the quote math kernel
+(`quote_one`, `quote`, `quoteQuantities`, `redeem_one`) over a
+`Basket : list BasketEntry.t`; (2) the basket-state lifecycle
+(`setPrimeBasket`, `refreshBasket`) over a `Storage` record
+(`basket, primeBasket, backupConfigs, nonce, disabled`), mirroring
+production's `BasketLibP1.nextBasket` selection logic. It omits **the
+asset-registry indirection (sim takes `AssetStatus` list as input),
+the oracle layer (`pegPrice` not consulted), the full Collateral
+state machine (modeled separately in `Collateral.v`), the warmup
+period and basket history, the governance flags `reweightable` and
+`enableIssuancePremium`, the `forceSetPrimeBasket` spell path, the
+`requireConstantConfigTargets` check, the `setBackupConfig`
+governance op, the `quoteCustomRedemption` and `getHistoricalBasket`
+backwards-compat reads, and the price/issuancePremium fold-in inside
+`price()`**. Per-backup targetPerRef weighting is approximated as
+`FIX_ONE` (header documents this). The proofs against this model are
+correct for the basket-shape lifecycle and quote algebra; transfer
+to production requires (i) the caller has already discharged the
+asset-registry boundary, (ii) the warmup period and lifecycle
+gates outside this sim are honoured.
 
-**Lifecycle modeled**:
-- `setPrimeBasket` validates `MIN_TARGET_AMT <= targetAmt[i] <=
-  MAX_TARGET_AMT` (1e12 / 1e21 from production lines 31–32),
-  rejects empty / over-cap (`MAX_BASKET_LENGTH = 64`) lists, rejects
-  duplicate erc20s. Successful calls write the new prime config and
-  increment `nonce` by 1. Returns `option Storage.t`.
-- `refreshBasket` is total over `Storage.t × list AssetStatus.t`.
-  Faithful to `BasketLibP1.nextBasket`: surfaces good prime collateral
-  in order, then for each target name with positive unsound weight,
-  selects up to `BackupConfig.max` good backups and distributes the
-  unsound weight evenly (floor quotient) across them. Sets
-  `disabled = true` iff the next-basket selection failed; otherwise
-  writes the new basket and increments `nonce`.
+### State omitted
 
-**Audit theorems** (in `Audit.v`):
-- `audit_setPrimeBasket_validates`: storage validity preserved.
-- `audit_refreshBasket_preserves_validity`: storage validity preserved
-  on both success and failure paths.
-- `audit_refreshBasket_targetAmt_conservation`: in the all-sound case,
-  exact targetAmt sum conservation across the refresh.
-- `audit_refreshBasket_disabled_implies_no_backup`: contrapositive
-  characterising when disabled flips to true.
+| Production state | Purpose | Simulation analog |
+|---|---|---|
+| `MIN_TARGET_AMT`, `MAX_TARGET_AMT`, `MAX_BACKUP_ERC20S = 64` | Bounds on per-prime target weights and backup array size | **All three modeled as constants ✓** (`MIN_TARGET_AMT`, `MAX_TARGET_AMT`, `MAX_BASKET_LENGTH = 64` — note rename: production has no explicit prime-basket length cap, sim applies the backup cap defensively to the prime list as well). |
+| `MIN_WARMUP_PERIOD`, `MAX_WARMUP_PERIOD` (60s / 1y) | Bounds on `warmupPeriod` setter | **No.** |
+| `assetRegistry`, `backingManager`, `rsr`, `rToken`, `stRSR` (component pointers) | Cross-component routing | **None.** |
+| `config: BasketConfig { erc20s, targetAmts, targetNames, backups }` | Governance-set prime + backup config | **`primeBasket : list PrimeEntry.t` + `backupConfigs : list BackupEntry.t` ✓** — flattened from the mappings, but content-equivalent. |
+| `basket: Basket` (struct with erc20s + refAmts mapping) | The live basket | **`basket : Basket` ✓** as `list BasketEntry.t`. |
+| `nonce` (uint48) | Basket version counter | **`nonce : U256.t` ✓**. The uint48 bound is loose in `Valid.t.nonce_u256` (`<= UINT256_MAX`, not `<= UINT48_MAX`). |
+| `timestamp` (uint48) | Last basket switch timestamp; consumed by warmup gate | **No.** |
+| `disabled` (bool) | Basket health flag — quote/issue/redeem gated when true | **`disabled : bool` ✓**. |
+| `_targetNames` (Bytes32Set, transient) | Function-local in `_switchBasket` | Computed by `unique_target_names` (sim line 439). |
+| `_newBasket` (Basket, transient) | Function-local in `_switchBasket` | Computed via `goods ++ backups` inside `refreshBasket` (sim line 525). |
+| `warmupPeriod` (uint48), `lastStatusTimestamp` (uint48), `lastStatus` (CollateralStatus) | 3.0.0 warmup gate | **None.** |
+| `basketHistory` (mapping uint48 -> Basket) | 3.0.0 historical reads for redemption | **None.** |
+| `_targetAmts` (Bytes32-to-uint map, transient) | Used inside `requireConstantConfigTargets` | **None.** |
+| `reweightable` (bool, immutable post-init) | Whether prime targets can change | **None** — sim assumes the unconditional setPrimeBasket path. |
+| `lastCollateralized` (uint48) | Most recent fully-collateralized nonce | **None.** |
+| `enableIssuancePremium` (bool) | 4.0.0 governance toggle for the issuance-premium feature | **None** — modeled as input to `IssuancePremium.v`. |
+| `__gap` storage | OZ reserved | **None.** |
 
-**Gaps that remain** (intentionally out of scope per the simulation
-header):
-- Asset-registry indirection — sim TAKES the AssetStatus list as
-  input rather than reading it from a registry.
-- Oracle layer — `pegPrice` etc. not consulted.
-- Full Collateral status state machine — already modeled in
-  `simulations/Collateral.v`; this sim consumes the boolean DISABLED
-  outcome via `AssetStatus.t`.
-- Governance modifier on `setPrimeBasket` (gated, not modeled).
-- `requireConstantConfigTargets` (reweightable RTokens); the
-  `forceSetPrimeBasket` / spell entry path is not modeled separately.
-- Per-backup `targetPerRef` weighting: production divides
-  `unsoundPrimeWt / (targetPerRef * size)`; sim sets `targetPerRef =
-  FIX_ONE` and divides by `size` alone — same algebraic shape, the
-  oracle-derived `targetPerRef` lookup is the elided piece.
-- Warmup period, basket history, `lastCollateralized`, governance
-  flags (`reweightable`, `enableIssuancePremium`).
-- Quote-time `revenueHiding` decay and per-token issuance premium
-  (modeled separately in `IssuancePremium.v`).
+### Operations omitted
+
+| Production function | Effect | Modeled? |
+|---|---|---|
+| `init(IMain, bool reweightable, uint48 warmupPeriod, bool enableIssuancePremium)` (line 109) | Sets reweightable / warmupPeriod / enableIssuancePremium | **No.** |
+| `disableBasket()` (line 138) — backingManager-only | Sets `disabled = true`; emits BasketSet | **No.** |
+| `refreshBasket()` (line 159) external — governance OR registry | Calls `assetRegistry.refresh()` then `_switchBasket()`; internally checks `requireConstantConfigTargets` for non-reweightable RTokens | **`refreshBasket` ✓** at the math/selection level. The `assetRegistry.refresh()` precondition, the `requireConstantConfigTargets` check, and the governance/registry auth gate are **unmodeled** — sim takes the AssetStatus list as input. |
+| `trackStatus()` (line 176) | Updates `lastStatus`, `lastStatusTimestamp`, emits events; consumed by warmup gate | **No.** |
+| `setPrimeBasket(IERC20[], uint192[])` (line 198) — governance-gated | Calls `_setPrimeBasket(false)` (the constant-targets path) | **`setPrimeBasket` ✓** at the math/validation level. The governance gate, `requireConstantConfigTargets`-when-not-reweightable check, and the `assetRegistry.toColl(_).targetName()` lookup are **unmodeled** — sim takes targetName as input on each PrimeEntry. |
+| `forceSetPrimeBasket(IERC20[], uint192[])` (line 208) — long-spell-only | Calls `_setPrimeBasket(true)` to bypass constant-targets check | **No** as a separate operation; the sim's `setPrimeBasket` is the unconditional write (post-validation), parameterised by an explicit allow list. |
+| `_setPrimeBasket(IERC20[], uint192[], bool disableTargetCheck)` (line 229) private | The implementation: validates targetAmts, builds the prime config | **`setPrimeBasket` ✓** for the validation + write; the disableTargetCheck branch isn't surfaced (sim is the always-write path post-validation). |
+| `setBackupConfig(bytes32 targetName, uint256 max, IERC20[] erc20s)` (line 289) — governance | Validates + writes the per-target backup config | **No.** Sim's `Storage.backupConfigs` is mutated only via constructor / direct field-setting in proofs. |
+| `fullyCollateralized()` (line 312) view | Returns `bool`: are we above `basketsNeeded`? | **No.** |
+| `status()` (line 319) view | Aggregates per-collateral statuses to a basket-level CollateralStatus | **No** — sim's `disabled` is the only basket-level flag. |
+| `isReady()` (line 336) view | True iff status==SOUND AND warmup elapsed | **No.** |
+| `quantity(IERC20)` (line 348) view | refAmts / refPerTok with CEIL (registry indirection + collateral lookup) | **No** at the public-entry level — quote math kernel works directly on `BasketEntry.refAmt`. |
+| `quantityUnsafe(IERC20, IAsset)` (line 364) | Same as quantity but skips asset-isCollateral check | **No.** |
+| `issuancePremium(ICollateral)` (line 371) | The feature flag-gated premium curve | **Modeled separately in `IssuancePremium.v`.** |
+| `_quantity(IERC20, ICollateral, RoundingMode)` (line 396) private | `refAmts.div(refPerTok, rounding)` | Implicit in `quote_one` which uses `mulu_toUint` directly on `refAmt`. |
+| `price()` / `price(bool applyIssuancePremium)` (lines 414, 424) | Per-asset price aggregation, with optional issuance-premium fold-in | **No.** |
+| `quote(uint192 amount, RoundingMode)` (line 472) view | Per-asset {qTok} list at a fresh-quote rounding | **`quote` ✓** at the algebraic level (`refAmt * baskets / FIX_ONE`); the production version applies the per-collateral `_quantity` (with issuancePremium and refPerTok lookups) which the sim collapses by setting refPerTok=FIX_ONE and not applying premium. |
+| `quote(uint192 amount, bool applyIssuancePremium, RoundingMode)` (line 487) | Same but with the issuance-premium fold-in | **No** — premium is modeled in `IssuancePremium.v` and consumed independently. |
+| `quoteCustomRedemption(uint48[], uint192[], uint192)` (line 526) | Historical-basket redemption using basketHistory | **No.** |
+| `basketsHeldBy(address)` (line 615) view | Per-account basket-held bottom/top range | **No.** |
+| `setWarmupPeriod(uint48)` (line 638) — governance | Validates + writes warmupPeriod | **No.** |
+| `setIssuancePremiumEnabled(bool)` (line 646) — governance | Toggles enableIssuancePremium | **No.** |
+| `_switchBasket()` (line 659) private | The full basket switch: builds targetNames, calls `BasketLibP1.nextBasket`, writes the new basket + nonce, sets disabled flag | **`refreshBasket` ✓** as the sim-side analog; per-backup targetPerRef weighting is approximated as `FIX_ONE`. |
+| `requireValidCollArray(IERC20[])` (line 688) private | Enforces non-empty, no-duplicates, no-zero-address | **`erc20s_unique` ✓** for the no-duplicates branch; non-empty and no-zero-address are modeled as `(len =? 0)` and absence of further address validation. |
+| `getHistoricalBasket(uint48)` (line 709) view | Backwards-compat read | **No.** |
+| `getPrimeBasket()` (line 743), `getBackupConfig(bytes32)` (line 767) | View accessors | Implicit via record projections. |
+
+### What the simulation *does* faithfully model
+
+- The `quote_one` algebraic core: `qTok = refAmt * baskets / FIX_ONE` (sim line 144 = `FixLib.mulu_toUint refAmt baskets mode`). This is correct *iff* the production caller has already applied `_quantity`'s `refAmts.div(refPerTok, rounding)` — sim collapses that by working at a `refPerTok = FIX_ONE` calibration.
+- `redeem_one` as the FLOOR-inverse of `quote_one` for the round-trip safety claim, including the `refAmt = 0 → 0` defensive return.
+- The full `setPrimeBasket` validation chain: empty / over-cap (`MAX_BASKET_LENGTH = 64`), all targetAmts in `[MIN_TARGET_AMT, MAX_TARGET_AMT]`, no duplicate erc20s. Successful writes increment `nonce` by 1.
+- `refreshBasket` as a total operation, mirroring `BasketLibP1.nextBasket`'s structure: surface good prime entries (in input order), then for each target name with positive unsound weight, select up to `BackupConfig.max` good backups and distribute the unsound weight evenly. `disabled = true` iff next-basket selection failed.
+- `unique_target_names` preserves first-occurrence order, mirroring production's `_targetNames` Bytes32Set population at line 181.
+- `Valid.t` carries: prime size bound, target-amt validity, prime erc20 uniqueness, nonce range, basket refAmt non-negativity. Audit theorems in `Audit.v` pin storage validity, target-amt conservation, and the disabled-iff-no-backup contrapositive.
+
+### Implications for proof transferability
+
+1. The most surprising divergence: production divides per-backup weight by `(targetPerRef * size)` (`unsoundPrimeWt / (targetPerRef * size)`) where `targetPerRef` is the per-collateral oracle-derived fixed-point ratio. The sim hard-codes `targetPerRef = FIX_ONE`, dividing only by `size`. **For non-fiat collateral with `targetPerRef ≠ FIX_ONE`, the sim's `refreshBasket` produces a different basket than production**. Header documents this; the algebraic shape is preserved but the calibration is off.
+2. The asset-registry boundary is large: sim takes `AssetStatus` list as input. Production builds it inside the `_switchBasket` loop at line 666–684 by calling `assetRegistry.toColl(erc20).status()` per asset. Lemmas about `refreshBasket` apply to *any* AssetStatus list, not the production-reachable ones (which respect the registry's structural invariants — no duplicates, all-registered, etc.).
+3. The `requireConstantConfigTargets` check (production line 234, called from `_setPrimeBasket(false)`) prevents non-reweightable RTokens from changing target-name composition. Sim's `setPrimeBasket` is the unconditional write — proofs about it apply to both reweightable and non-reweightable deployments, but reachable-state divergence applies for the latter.
+4. The warmup-period gate (`isReady()`) is the precondition for a new basket to take effect post-refresh. Sim does not model it; lemmas about post-refresh quote behaviour assume the warmup is complete (or treat the gate as an integration responsibility).
+5. The quote-time `applyIssuancePremium` fold-in (production line 424–452) is unmodeled. Lemmas about `quote()` cover the no-premium calibration; for the premium calibration, callers must compose the sim's `quote_one` with `IssuancePremium.v`'s output manually.
+6. The `basketHistory` and `quoteCustomRedemption` 3.0.0 mechanism is entirely unmodeled. The sim's `redeem_one` is for the live basket only.
+7. The "disabled at init" semantic (sim's `empty_storage` has `disabled = true` matching production line 158) is faithful, but the `init()` function itself isn't modeled — the sim operates on arbitrary `Storage.t` values, including states production's `init` would never produce.
 
 ## DutchTrade
 
