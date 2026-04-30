@@ -14,6 +14,12 @@ Require Import simulations.RocqOfSolidity.
 (* Section 1 - Bug findings. *)
 Require Import Reserve.proofs.Distributor_deprecation_bug.
 
+(* Section 8 - StRSR seizure / cancel-unstake invariants. *)
+Require Reserve.proofs.StRSR.
+Require Import Reserve.proofs.StRSR_validity.
+Require Import Reserve.proofs.StRSR_chain.
+Require Import Reserve.proofs.StRSR_witnesses.
+
 (* Section 2 - Certora mitigation (PR #1283). *)
 Require Import Reserve.proofs.Fixed_certora_mitigation.
 
@@ -214,3 +220,61 @@ Notation audit_endtoend_jointly_bounded :=
     arguments to the 5 functional domains aren't in scope. *)
 Notation audit_endtoend_storage_jointly_bounded :=
   EndToEndStrengthened.all_domain_scalars_jointly_bounded.
+
+(** ============================================================
+    Section 8 - StRSR seizure / cancel-unstake invariants.
+
+    The seizure and cancel-unstake operations are the most
+    structurally intricate StRSR transitions. The lemmas here pin
+    the load-bearing safety properties across both surfaces.
+    ============================================================ *)
+
+(** [seizeRSR] preserves [Valid.t] given the precondition [rsrAmount
+    <= totalRSRStaked + draftRSR] (production's [SeizeExceedsBalance]
+    revert). The proof case-splits on the four reset configurations
+    (no reset, stake reset, draft reset, both reset) without admits.
+
+    See StRSR_validity.v for the full proof. *)
+Notation audit_seizeRSR_preserves_validity :=
+  StRSRValidity.seizeRSR_preserves_validity.
+
+(** [seizeRSR] (Phase 1, before any era-reset) drops the combined RSR
+    [totalRSRStaked + draftRSR] by exactly [rsrAmount]. The era-reset
+    branches DO NOT preserve this exactly: when [beginEra] fires the
+    residue is "given up" in addition to the proportional share.
+    This lemma pins the modular conservation identity for the no-
+    reset branch.
+
+    See proofs/StRSR.v for the projection definition. *)
+Notation audit_seizeRSR_conserves_total_RSR :=
+  Reserve.proofs.StRSR.StRSRProofs.seizeRSR_phase1_conserves_total_RSR.
+
+(** [unstake] then [cancelUnstake_last] from a fresh genesis storage
+    at rate = FIX_ONE recovers the original stRSR amount EXACTLY
+    (no rounding loss). The "lossy recovery" at non-FIX_ONE rates
+    is bounded by the rounding gap of the two FLOOR-divrnd steps,
+    quantified per witness in the CAS suite.
+
+    See proofs/StRSR_chain.v. *)
+Notation audit_unstake_cancel_round_trip_bound :=
+  StRSRChain.unstake_then_cancelUnstake_lossy_recovery.
+
+(** Composition: payoutRewards then seizeRSR preserves [Valid.t].
+    The natural pairing of accrual followed by seizure (production
+    runs [_payoutRewards()] inline at the top of [seizeRSR],
+    StRSR.sol#L450). *)
+Notation audit_payoutRewards_then_seizeRSR_preserves_validity :=
+  StRSRChain.payoutRewards_then_seizeRSR_preserves_validity.
+
+(** Lifecycle: unstake -> seizeRSR -> withdraw preserves [Valid.t].
+    The most stress-tested integration property: an in-flight
+    unstaking interleaved with a seizure should not corrupt
+    storage invariants. *)
+Notation audit_unstake_seize_withdraw_preserves_validity :=
+  StRSRChain.unstake_then_seizeRSR_then_withdraw_preserves_validity.
+
+(** [cancelUnstake_last] preserves [Valid.t]. The LIFO pop-the-back
+    operation preserves all storage invariants, including the FIFO
+    queue order and the conservation invariant. *)
+Notation audit_cancelUnstake_preserves_validity :=
+  StRSRValidity.cancelUnstake_last_preserves_validity.

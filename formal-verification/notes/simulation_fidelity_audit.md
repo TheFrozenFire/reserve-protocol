@@ -29,7 +29,7 @@ so with the same semantics (return value, revert, no-op)?
 | **BasketHandler** | `refAmt = 0` in `redeem_one` → 0 returned (avoids div-by-zero) | Empty basket → `nil` quote | n/a | Faithful, but the production `quote` reverts on basket-not-set; sim doesn't model the lifecycle. |
 | **BackingManager** | `bal <= req` → zero split; `totalShares = 0` → `Result.Revert` | n/a | n/a | Faithful for the math kernel. |
 | **Rebalance** | n/a (algebraic skeleton) | n/a | n/a | Header explicitly scopes out per-asset oracle / FIX_MAX-overflow reverts. |
-| **StRSR** | `totalStRSR = 0` → genesis rate `FIX_ONE` | Empty queue handled | None — `terminal-state DISABLED` for collateral has no analog here | Major omissions documented in StRSR section. |
+| **StRSR** | `totalStRSR = 0` → genesis rate `FIX_ONE`; `seizeRSR` totalRSR = 0 → no-op | Empty queue handled; `cancelUnstake_last` on empty queue is a no-op | Era-reset (via `beginEra` / `beginDraftEra`) is the closest analog: wipes the affected pool and bumps the era counter. | Phase A-D expansion: era model, seizeRSR, cancelUnstake_last all modeled. Per-account state and the ERC20 surface remain out of scope. |
 | **TradeLib** | `a = 0 ∨ b = 0` → 0; `c = 0 ∨ FIX_MAX-input` → saturate | n/a | n/a | Faithful match against `safeMulDiv` production semantics. |
 | **DutchTrade** | `progression < 20%` etc. dispatched cleanly; out-of-range t handled by clamping (instead of revert) | n/a | Phase 4 is the terminal price clip | **Divergence**: production reverts when called outside `[startTime, endTime]`; sim returns nearest endpoint as a total function. Header documents this. |
 | **GnosisTrade** | `sellAmount = 0` → `worstCasePrice = 0`; `initBal <= sellBalAfter` → no-violation early return | n/a | `canSettle` checks `status_open` flag | Faithful for the math; auth/lifecycle gating not modeled. |
@@ -60,7 +60,7 @@ never sees.
 | **BasketHandler** | `Storage = list (asset, refAmt)` ✓ | `baskets`, `mode` | No — `setPrimeBasket`, `refreshBasket`, etc. not modeled. The basket is treated as static. |
 | **BackingManager** | None (pure math kernel) | `basketsHeldBottom`, `basketsNeeded`, `backingBuffer`, `quantity`, `bal`, `decimals`, `rTokenTotal`, `rsrTotal` | No state. **All governance params are frozen-snapshot here**, including `backingBuffer` which production stores. A reviewer should confirm the math is invariant under arbitrary `backingBuffer` (true within `Valid.bufferInputs`) and that callers pass the live storage value, not a stale copy. |
 | **Rebalance** | None (algebraic) | All inputs are `RangeInputs` arg fields | n/a — abstract over any `RangeInputs`, so live-vs-frozen is at the caller. |
-| **StRSR** | Documented in StRSR section; many production storage fields omitted | `now`, `delay`, `rewardsPool`, `amount` | **Major divergence**: `unstakingDelay` is a function arg in the sim but a storage field in production. `rewardRatio` is in `Storage.ratio` but no `setRewardRatio` is modeled. |
+| **StRSR** | Documented in StRSR section. Era / draftEra / draftRSR / queue all in storage post-Phase-A. | `now`, `delay`, `rewardsPool`, `amount`, `rsrAmount` (seizeRSR) | **Remaining divergences**: `unstakingDelay` is a function arg in the sim but a storage field in production. `rewardRatio` is in `Storage.ratio` but no `setRewardRatio` is modeled. The simulation's tighter `draftRate = FIX_ONE` invariant (vs production's [FIX_ONE, MAX_DRAFT_RATE] band) means some production-reachable states are unreachable in the simulation. |
 | **TradeLib** | None | All inputs are args | Pure kernel; live-vs-frozen is at the caller. |
 | **DutchTrade** | `Auction { startTime, endTime, bestPrice, worstPrice, sellAmount, buyDecimals }` ✓ matches | `t` (now) | No — auction lifecycle (init, bid, settle) not modeled at the state-transition level. |
 | **GnosisTrade** | None (pure math kernel) | All inputs are args | Same shape as BackingManager — pure kernel. |
@@ -133,47 +133,70 @@ simulation express that?
 
 # Part 2 — Per-simulation summaries
 
-## StRSR (gold-standard audit)
+## StRSR
 
-[Detailed audit retained from earlier work.]
+The simulation now captures **the full aggregate state-transition
+math**: revenue accrual, exchange-rate evolution, the FIFO
+withdrawal-queue lifecycle (`unstake` -> `withdraw`), the LIFO cancel
+operation (`cancelUnstake_last`), and the production-faithful
+seizure machinery (`seizeRSR` with proportional split and era resets
+via `beginEra` / `beginDraftEra`).
 
-The simulation captures the **revenue accrual and aggregate exchange
-rate math**. It omits substantial structural state and operations that
-the production contract maintains. The proofs against this model are
-correct for the model; they do not transfer to the production contract
-without first verifying the omitted structure does not interact with
-the proved invariants.
+What remains omitted are **per-account state** (the production
+`stakes[era][account]` and `draftQueues[draftEra][account]` mappings
+collapse to a single global queue in the simulation) and **the ERC20
++ governance + integration surface** (transfer/approve/permit, the
+withdrawal-leak mechanism, governance setters, and the
+`basketHandler.isReady()` / `fullyCollateralized()` gates).
 
-### State omitted
+### State (post-Phase-A expansion)
 
 | Production state | Purpose | Simulation analog |
 |---|---|---|
-| `era`, `draftEra` | Seizure-driven balance reset (entire stake/draft pool wiped, era incremented) | None. The simulation has no notion of seizure. |
-| `stakes[era][account]` | Per-account stake balance (the actual ERC20 balances) | None. Simulation aggregates to `totalStRSR` only. |
+| `era`, `draftEra` | Seizure-driven balance reset markers | **`era`, `draftEra` ✓** (Phase A). Bumped by `beginEra` / `beginDraftEra`. |
+| `stakes[era][account]` | Per-account stake balance (the actual ERC20 balances) | None. Simulation aggregates to `totalStRSR`. |
 | `draftQueues[draftEra][account]` | Per-account draft queue, indexed by era | Single global `queue : list Withdrawal.t`. |
-| `firstRemainingDraft[era][account]` | Index past which drafts have been claimed | None. Simulation has no claim/dequeue operation. |
+| `firstRemainingDraft[era][account]` | Index past which drafts have been claimed | Implicit: `withdraw` pops the front of the queue, `cancelUnstake_last` pops the back. |
 | `CumulativeDraft.drafts` (uint176, *running total*) | Lets `withdraw` compute claimed amount as `queue[end-1].drafts - queue[first-1].drafts` in O(1) regardless of cancellations | `Withdrawal.rsrAmount` (the individual amount). Different data structure with different complexity properties. |
-| `stakeRate`, `draftRate` (D18, separately tracked) | Independent exchange rates for stakes vs drafts; both can saturate at MAX_STAKE_RATE / MAX_DRAFT_RATE | Single derived `exchange_rate` from totals. No saturation modeled. |
-| `stakeRSR`, `draftRSR` (separate RSR pools) | Drafts are paid from a distinct pool that doesn't earn rewards; seizure hits both proportionally | Conflated as `totalRSRStaked`. |
-| `totalDrafts`, `totalStakes` separately | Sum of all drafts vs sum of all stakes | Only `totalStRSR`. |
+| `stakeRate`, `draftRate` (D18, separately tracked) | Independent exchange rates for stakes vs drafts; both can saturate at MAX_STAKE_RATE / MAX_DRAFT_RATE | Single derived `exchange_rate` from totals. **The simulation maintains the tighter `draftRate = FIX_ONE` invariant** (vs production's [FIX_ONE, MAX_DRAFT_RATE] band): seizures that would push the implied rate above FIX_ONE trigger an early `beginDraftEra`. The reachable-state set is therefore a strict subset of production's, but every reachable state satisfies the [Valid.t] invariants. |
+| `stakeRSR`, `draftRSR` (separate RSR pools) | Drafts are paid from a distinct pool that doesn't earn rewards; seizure hits both proportionally | **`totalRSRStaked`, `draftRSR` ✓** (Phase A). `unstake` moves rsrAmount from `totalRSRStaked` into `draftRSR`. |
+| `totalDrafts`, `totalStakes` separately | Sum of all drafts vs sum of all stakes | `totalStRSR` (stakes) and `sum_rsr_amounts queue` (drafts). |
 | `_allowances`, `_nonces`, `_delegationNonces`, ERC20 name/symbol | ERC20 surface | None. The simulation isn't an ERC20. |
 | `leaked`, `lastWithdrawRefresh`, `withdrawalLeak` | 3.0.0 withdrawal-leak mechanism: refresh required if cumulative leak exceeds `MAX_WITHDRAWAL_LEAK = 30%` | None. |
 | `unstakingDelay`, `rewardRatio`, `withdrawalLeak` (governance setters) | Mutable governance parameters | `delay` is a function argument; `ratio` is in storage but with no setter. |
 | `assetRegistry`, `backingManager`, `basketHandler`, `rsr` | Component pointers — `basketHandler.isReady()` and `fullyCollateralized()` gate `withdraw` | None. |
 
-### Operations omitted
+### Operations (post-Phase-C expansion)
 
 | Production function | Effect | Modeled? |
 |---|---|---|
-| `withdraw(account, endId)` | The actual RSR claim — pops drafts from the queue once `availableAt` has passed and transfers RSR to the account. Required for the unstake lifecycle to complete. | **No.** Simulation only models the queue-push half (`unstake`). |
-| `cancelUnstake(endId)` | Rolls back queued drafts, returning them to active stake | **No.** |
-| `seizeRSR(rsrAmount)` | Backing-manager-triggered seizure of RSR from both stake and draft pools, possibly triggering era reset if the pool is fully consumed | **No.** This is a major omission — the entire seizure-driven era model is unrepresented. |
-| `resetStakes()` | Governance-triggered era reset when stakeRate / draftRate exits the safe band | **No.** |
+| `withdraw(account, endId)` | Pops drafts from the queue once `availableAt` has passed and transfers RSR to the account | **`withdraw` ✓** (one-step pop; batch withdrawal is iterated composition). |
+| `cancelUnstake(endId)` | Rolls back queued drafts, returning them to active stake | **`cancelUnstake_last` ✓** (Phase B). One-step LIFO pop with re-stake at the current rate. |
+| `seizeRSR(rsrAmount)` | Backing-manager-triggered seizure of RSR from both stake and draft pools, possibly triggering era reset if the pool is fully consumed | **`seizeRSR` ✓** (Phase C). Production-faithful proportional split (CEIL on stake side) with era-reset triggers. The simulation's reset trigger on the draft side is tighter than production's (FIX_ONE vs MAX_DRAFT_RATE boundary). |
+| `resetStakes()` | Governance-triggered era reset when stakeRate / draftRate exits the safe band | Not modeled as a standalone operation, but the underlying primitives `beginEra` and `beginDraftEra` are available; a caller can compose them. |
 | `transfer`, `approve`, `transferFrom`, `permit`, `delegate`, `delegateBySig` | ERC20 + ERC20Permit + delegation surface | **No.** |
-| `beginEra`, `beginDraftEra` | Internal era-reset primitives | **No.** |
+| `beginEra`, `beginDraftEra` | Internal era-reset primitives | **`beginEra`, `beginDraftEra` ✓** (Phase A). |
 | `init` | Initialization (sets payoutLastPaid, rsrRewardsAtLastPayout, governance params) | **No.** Simulation operates on an arbitrary `Storage.t`. |
 | `setUnstakingDelay`, `setRewardRatio`, `setWithdrawalLeak` | Governance setters | **No.** |
 | `payoutRewards()` (public) vs `_payoutRewards()` (internal) | The public form has no arguments and reads `rsrRewards()` from RSR balance; simulation takes `rewardsPool` as an explicit argument | **Partial.** The integral form is correct; the snapshot-vs-balance distinction is acknowledged in the simulation header. |
+
+### Phase-C invariants
+
+The expansion adds these load-bearing theorems (all in `proofs/`):
+- `seizeRSR_preserves_validity` (StRSR_validity.v)
+- `seizeRSR_phase1_conserves_total_RSR`, `seizeRSR_proportional` (StRSR.v)
+- `cancelUnstake_last_preserves_validity` (StRSR_validity.v)
+- `unstake_then_cancelUnstake_lossy_recovery` (StRSR_chain.v)
+- `payoutRewards_then_seizeRSR_preserves_validity` (StRSR_chain.v)
+- `unstake_then_seizeRSR_then_withdraw_preserves_validity` (StRSR_chain.v)
+- `beginEra_preserves_validity`, `beginDraftEra_preserves_validity` (StRSR_validity.v)
+- `unstake_preserves_pools_sum` (Integration_unstake_lifecycle.v): `totalRSRStaked + draftRSR = const`.
+
+CAS witness coverage:
+- `cas/strsr/exchange_rate_evolution.gp` (existing)
+- `cas/strsr/withdrawal_queue.gp` (existing)
+- `cas/strsr/cancel_unstake.gp` (Phase B)
+- `cas/strsr/seize_rsr.gp` (Phase C)
 
 ## Throttle
 
@@ -405,18 +428,39 @@ Status as of the audit-driven follow-up commits:
    model of production's uint48 truncation arithmetic — both larger
    changes than fit this pass.
 
-6. **Per-domain operation surface expansion. ✗ DEFERRED.**
-   The remaining big surfaces are substantial work and stay deferred:
+6. **Per-domain operation surface expansion. PARTIAL: StRSR DONE; others DEFERRED.**
 
-   - StRSR `seizeRSR` and `cancelUnstake`. `seizeRSR` requires
-     modeling era reset, which in turn requires a `era` /
-     `draftEra` field, separate `stakeRSR`/`draftRSR` pools, and the
-     `MAX_STAKE_RATE` saturation model. `cancelUnstake` is simpler in
-     principle (pop-the-back of the queue, convert rsrAmount back to
-     stake at the current rate) but the simulation's queue is a
-     `list ... ` with append-at-back; modeling LIFO removal cleanly
-     needs `List.removelast`/`List.last` plumbing. Both are
-     incremental from `withdraw` but not free.
+   - StRSR `seizeRSR` and `cancelUnstake`. **DONE.** Phases A-D
+     landed:
+     - Phase A: era / draftEra / draftRSR storage scaffolding,
+       `beginEra` / `beginDraftEra` primitives, strengthened
+       `Valid.t` (draftRSR_nonneg, queue_drafts_le_draftRSR,
+       queue_entries_nonneg). Existing operations (stake, unstake,
+       withdraw, payoutRewards) updated; unstake now correctly
+       moves rsrAmount into draftRSR.
+     - Phase B: `cancelUnstake_last` (LIFO pop-the-back with
+       re-stake at the current rate); validity preservation;
+       round-trip lemma; CAS witness `cas/strsr/cancel_unstake.gp`.
+     - Phase C: `seizeRSR` (proportional split with era-reset
+       triggers, production-faithful CEIL on stake side, residual
+       to draft); validity preservation across all four reset
+       branches; conservation and proportionality theorems; CAS
+       witness `cas/strsr/seize_rsr.gp`.
+     - Phase D: composition lemmas
+       (`payoutRewards_then_seizeRSR_preserves_validity`,
+       `unstake_then_seizeRSR_then_withdraw_preserves_validity`),
+       xcheck reflexivity for the new witness values, audit
+       notations in `Audit.v` Section 8.
+
+     Documented divergence: the simulation's `Valid.t` carries the
+     tighter invariant `sum_rsr_amounts queue <= draftRSR`
+     (effective `draftRate = FIX_ONE`) where production allows up
+     to `MAX_DRAFT_RATE`. Seizures that would push the implied rate
+     above FIX_ONE trigger an early `beginDraftEra` in the sim;
+     production allows the rate to drift up to its cap before
+     era-resetting. The reachable-state set in the simulation is a
+     strict subset of production's; safety properties proved on
+     the simulation transfer to production unconditionally.
 
    - BackingManager's full `forwardRevenue` and `manageTokens`. The
      simulation today is `BackingManagerForwardRevenueMath` — only
@@ -431,8 +475,8 @@ Status as of the audit-driven follow-up commits:
      governance state (basket nonce, prime/reference distinction),
      `swapRegistered` semantics, and the asset-registry interaction.
 
-   These three are tracked as future work; the audit document now
-   serves as the scoping artifact for that effort.
+   The two remaining surfaces (BackingManager, BasketHandler) are
+   tracked as future work.
 
 7. **DAO-fee leg in Distributor. ✓ DONE.**
    - Added `distributeAmounts_with_dao_fee` alongside the existing

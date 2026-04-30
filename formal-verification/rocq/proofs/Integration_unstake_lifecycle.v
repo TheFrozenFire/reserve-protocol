@@ -78,4 +78,23 @@ Proof.
   lia.
 Qed.
 
+(** ===== Strengthened conservation: totalRSRStaked + draftRSR =====
+
+    With the post-Phase-A simulation that separately tracks
+    [draftRSR] (the RSR pool backing in-flight withdrawals), the
+    natural conservation invariant is the system-wide RSR pool
+
+      totalRSRStaked + draftRSR = const.
+
+    [unstake] moves [rsrAmount] from [totalRSRStaked] into
+    [draftRSR] one-for-one, leaving the sum unchanged. *)
+Lemma unstake_preserves_pools_sum
+    (s : Storage.t) (amount now delay : U256.t) :
+  let s' := unstake s amount now delay in
+  s'.(Storage.totalRSRStaked) + s'.(Storage.draftRSR)
+    = s.(Storage.totalRSRStaked) + s.(Storage.draftRSR).
+Proof.
+  cbv zeta. unfold unstake. cbn -[Z.add Z.sub Z.mul]. lia.
+Qed.
+
 End IntegrationUnstakeLifecycle.

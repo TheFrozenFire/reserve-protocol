@@ -188,4 +188,77 @@ Lemma xcheck_payout_lifts_rate :
   exchange_rate (payoutRewards cal_payout_storage 10 cal_pool).
 Proof. vm_compute. reflexivity. Qed.
 
+(** ---------- (6) cancelUnstake_last round-trip ----------
+
+    Pinned at the FIX_ONE rate from [unstake_init_storage]:
+    unstake -> cancel restores totalStRSR and totalRSRStaked
+    exactly. Mirrors [cas/strsr/cancel_unstake.gp] probe (1).
+*)
+Lemma xcheck_cancel_round_trip :
+  let s1 := unstake unstake_init_storage cal_unstake_qty 1000 100 in
+  let s2 := cancelUnstake_last s1 in
+  s2.(Storage.totalStRSR) = cal_totalStakes /\
+  s2.(Storage.totalRSRStaked) = cal_totalStakes.
+Proof. vm_compute. split; reflexivity. Qed.
+
+(** ---------- (7) seizeRSR full drain (era-reset) ----------
+
+    Pinned via cal_storage with a non-zero draft pool: seizing the
+    full balance drives both pools to 0 and triggers both era
+    resets. Mirrors [cas/strsr/seize_rsr.gp] probe (2).
+*)
+
+Definition seize_init_storage_x : Storage.t := {|
+  Storage.totalStRSR              := cal_totalStakes;
+  Storage.totalRSRStaked          := cal_stakeRSR;
+  Storage.totalRewardsAccumulated := 0;
+  Storage.ratio                   := cal_ratio;
+  Storage.lastPayout              := 0;
+  Storage.queue                   := [];
+  Storage.era                     := 0;
+  Storage.draftEra                := 0;
+  Storage.draftRSR                := 0;
+|}.
+
+Lemma xcheck_seize_full_drains :
+  let total := seize_init_storage_x.(Storage.totalRSRStaked) in
+  let s := seizeRSR seize_init_storage_x total in
+  s.(Storage.totalRSRStaked) = 0 /\
+  s.(Storage.era) = 1 /\
+  s.(Storage.draftEra) = 1.
+Proof. vm_compute. repeat split; reflexivity. Qed.
+
+(** ---------- (8) seizeRSR proportional split ----------
+
+    Pin the post-seizure stake/draft residues for a 1% seize on the
+    cal_storage state. Mirrors [cas/strsr/seize_rsr.gp] probe (4)
+    with the two-pool calibration. *)
+Definition seize_split_storage : Storage.t := {|
+  Storage.totalStRSR              := cal_totalStakes;
+  Storage.totalRSRStaked          := 30 * 10^6 * FIX_ONE;
+  Storage.totalRewardsAccumulated := 0;
+  Storage.ratio                   := cal_ratio;
+  Storage.lastPayout              := 0;
+  Storage.queue                   := [];
+  Storage.era                     := 0;
+  Storage.draftEra                := 0;
+  Storage.draftRSR                := 70 * 10^6 * FIX_ONE;
+|}.
+
+(** With totalRSR = 100M * FIX_ONE, seizing 2M * FIX_ONE (2%):
+      stake_share = ceil(30M * 2M / 100M) = 600_000
+      draft_share = 2M - 600_000 = 1_400_000
+    But all values are scaled by FIX_ONE, so:
+      stake_share = ceil(30M*FIX_ONE * 2M*FIX_ONE / 100M*FIX_ONE)
+                  = 30M * 2M * FIX_ONE / 100M = 600_000 * FIX_ONE.
+    Pre/post pool deltas: 30M -> 29.4M, 70M -> 68.6M. *)
+Lemma xcheck_seize_proportional_30_70 :
+  let s := seizeRSR seize_split_storage (2 * 10^6 * FIX_ONE) in
+  (* draft_post < draft_pre, stake_post < stake_pre, but exact values
+     depend on whether either reset fires. With sum_rsr_amounts queue =
+     0 (empty queue) and draft_post >> 0, neither fires. *)
+  s.(Storage.totalRSRStaked) = 30 * 10^6 * FIX_ONE - 6 * 10^5 * FIX_ONE /\
+  s.(Storage.draftRSR) = 70 * 10^6 * FIX_ONE - 14 * 10^5 * FIX_ONE.
+Proof. vm_compute. split; reflexivity. Qed.
+
 End StRSRXCheck.
