@@ -1199,6 +1199,33 @@ Status as of the audit-driven follow-up commits:
      strict subset of production's; safety properties proved on
      the simulation transfer to production unconditionally.
 
+     **Tightening to a proper draftRate field was attempted via a
+     sub-agent in a follow-up session and did NOT land.** The agent's
+     in-progress work introduced a `draftRate : U256.t` field, replaced
+     the conservation invariant with `draftRSR * draftRate >= totalDrafts
+     * FIX_ONE`, and rewrote `unstake` / `withdraw` / `cancelUnstake_last`
+     / `seizeRSR` to use it. Most of the simulation compiled, but the
+     `withdraw_preserves_validity` proof at `proofs/StRSR_validity.v`
+     line 349 had an unresolved error (the chain showing
+     `0 <= rsrPaid <= draftRSR` from the new conservation invariant
+     wasn't completed). The agent ran ~15 full builds over 1.5 hours
+     without converging. Work was discarded; the agent's CAS witness
+     `cas/strsr/draft_rate_evolution.gp` (commit `e7fee803`) was kept.
+     The dirty state is preserved on `git stash` for potential revival
+     under the message "WIP: StRSR draftRate agent's incomplete work
+     (line 349 proof error)". This remains the highest-impact open item
+     in the audit.
+
+   - **Plugin-specific collateral coverage. ✓ DONE.**
+     CTokenFiatCollateral and CurveStableCollateral now have full
+     simulation modules, validity-preservation lemmas, xcheck
+     reflexivity theorems, and CAS witnesses. The two highest-
+     deployment plugins are covered. Other plugins (Curve metapool,
+     AaveV3, RTokenAsset, OETHCollateral, CTokenV3, Curve recursive,
+     StakeDAO recursive) remain on the abstract base only — see
+     the new `## CTokenFiatCollateral` and `## CurveStableCollateral`
+     sections in Part 2.
+
 7. **DAO-fee leg in Distributor. ✓ DONE.**
    - Added `distributeAmounts_with_dao_fee` alongside the existing
      `distributeAmounts`. Models the production `totals()` inflation
