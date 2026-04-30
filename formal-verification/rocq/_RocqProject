@@ -66,6 +66,7 @@ proofs/Distributor_chain.v
 proofs/Collateral_chain.v
 proofs/BasketHandler_chain.v
 proofs/BackingManager_chain.v
+proofs/BackingManager_forward_iter.v
 proofs/Rebalance_chain.v
 proofs/IssuancePremium_chain.v
 proofs/DutchTrade_chain.v
