@@ -378,24 +378,63 @@ that depend on the new-ratio-applies-to-next-period semantic to use
 4. The governance gate on `setRatio` is unmodeled: the simulation treats setRatio as available to any caller, with `MAX_RATIO` as the only cap. Production additionally requires `requireGovernanceOnly()` (production line 83 modifier) — the sim's lemmas hold for any caller that respects the cap, which is strictly weaker than production's reachability.
 5. The `init()` snapshot semantic ("lastPayout = now at init") is unmodeled. Lemmas that depend on the genesis state are vacuous on storage states the simulation regards as well-formed but production's `init` would never produce.
 
-## Distributor
+## Distributor (gold-standard audit)
 
-**Math-kernel scoped.** Models `totals`, `tokensPerShare`,
-`distributeAmounts` over a flat list of `(addr, RevenueShare)` pairs.
+The simulation captures **the inner-loop conservation math
+(`totals`, `tokensPerShare`, `distributeAmounts`) plus the DAO-fee-aware
+extension (`distributeAmounts_with_dao_fee`, `feeShareInflation`,
+`paidOutShares`) added during the audit follow-up**. It omits **the
+storage-mutating governance ops (`setDistribution`, `setDistributions`,
+`init`), the `distribute` external entry (auth + reward-accounting +
+ERC20 transfers), and the EnumerableSet ordering guarantee**. The
+proofs against this model are correct for the per-call accounting
+math; transferring them to production requires verifying (i) callers
+have already discharged the auth/erc20-identity gates, and (ii) the
+order-of-iteration matches what `EnumerableSet` exposes (which
+guarantees insertion-order traversal — sim uses a plain list).
 
-**Gaps**:
-- `distribute`, `setDistribution`, `setDistributions`, `init` not modeled
-  (acknowledged in header).
-- DAOFeeRegistry leg explicitly omitted (acknowledged). The CAS finding
-  about governance-conditional auction fees (`CAS_additional_findings.v`)
-  covers a related accounting gap; the simulation doesn't reach it.
-- Reward accounting calls (`stRSR.payoutRewards()`, `furnace.melt()` at
-  production lines 195-198) not modeled.
-- Auth checks (`require(caller == rsrTrader || rTokenTrader)`,
-  `require(erc20 == rsr || erc20 == rToken)`) not modeled.
-- `EnumerableSet` representation replaced with a plain list. Equivalent
-  for the math but means proofs don't see the order-stability guarantee
-  EnumerableSet provides.
+### State omitted
+
+| Production state | Purpose | Simulation analog |
+|---|---|---|
+| `destinations` (EnumerableSet.AddressSet) | The set of distribution addresses | **Plain `list (U256.t * RevenueShare.t)`** — equivalent on content, but the sim does not witness EnumerableSet's ordering guarantee. |
+| `distribution[address]` (mapping) | RevenueShare per destination | Inlined into the `Storage` list as the second tuple element. |
+| `FURNACE` / `ST_RSR` (constant addresses 1 / 2) | Sentinel addresses for furnace and StRSR routing | Not modeled — sim treats every destination as a generic address; the `addrTo == FURNACE/ST_RSR` rewrite (production lines 155–161) and `accountRewards` flag-setting are not represented. |
+| `MAX_DESTINATIONS_ALLOWED` (uint8 = 100), `MAX_DISTRIBUTION` (uint16 = 10000) | Per-share and total-destinations governance caps | **`MAX_DISTRIBUTION ✓`, `MAX_DESTINATIONS ✓`** as constants, but the sim's operations do not enforce them at write time (no `setDistribution` modeled). |
+| `rsr`, `rToken`, `furnace`, `stRSR`, `rTokenTrader`, `rsrTrader` (component pointers) | Routing + token identity + auth | **None.** |
+| `__gap` (uint256[44]) | OZ reserved storage | None. |
+| Component-inherited (governance role, pause/frozen flags) | Auth | None. |
+
+### Operations omitted
+
+| Production function | Effect | Modeled? |
+|---|---|---|
+| `init(IMain, RevenueShare)` (line 44) | Sets up `destinations` with FURNACE / ST_RSR seeded from `dist`; caches components | **No.** |
+| `setDistribution(address dest, RevenueShare)` (line 61) — governance-gated | Validates and writes a single destination's share; calls `_ensureSufficientTotal` post-write; opportunistic `distributeTokenToBuy()` calls on RsrTrader / RTokenTrader | **No.** |
+| `setDistributions(address[] dests, RevenueShare[] shares)` (line 81) — governance-gated | Batch version of `setDistribution` | **No.** |
+| `distribute(IERC20 erc20, uint256 amount)` (line 120) — RevenueTrader-gated | The entry point: validates auth + erc20 identity, computes `tokensPerShare`, transfers per destination, pays DAO fee, calls `furnace.melt()` / `stRSR.payoutRewards()` based on `accountRewards` | **Partial.** The math kernel is `distributeAmounts` / `distributeAmounts_with_dao_fee`; the auth check, the `tokensPerShare != 0` revert (production line 134), the `transferFrom` ERC20 calls, the FURNACE/ST_RSR address rewrites, the `daoFeeRegistry.getFeeDetails(rToken)` indirection, and the post-distribute `payoutRewards()` / `melt()` accounting calls are all unmodeled. |
+| `totals()` (line 204) | Public view: aggregate rTokenTotal/rsrTotal across destinations, applies DAO fee inflation if `daoFeeRegistry` is set | **`totals` ✓** for the inner loop; **`feeShareInflation` ✓** for the DAO-fee adjustment. The wiring (consult `main.daoFeeRegistry()`, call `getFeeDetails(rToken)`) is unmodeled — sim takes `feeNumerator` and `feeDenominator` as arguments. |
+| `_setDistribution(address, RevenueShare)` (line 240) | The internal validator: enforces the 8 `require` checks (non-zero dest, not furnace/stRSR/rsr/rToken/daoFeeRegistry, FURNACE.rsrDist=0, ST_RSR.rTokenDist=0, share caps, MAX_DESTINATIONS) | **No.** |
+| `_ensureSufficientTotal(uint24, uint24)` (line 269) | Asserts `rTokenTotal + rsrTotal >= MAX_DISTRIBUTION` | **No.** |
+| `cacheComponents()` (line 274) | Re-reads component pointers from `main`; called post-upgrade | **No.** |
+
+### What the simulation *does* faithfully model
+
+- `totals(s) = (sum of rTokenDist, sum of rsrDist)` over the destinations list — the inner loop at production lines 204–211, ignoring the DAO-fee branch.
+- `tokensPerShare(s, amount, isRSR) = amount / totalShares` (FLOOR), with the explicit `totalShares = 0 -> 0` short-circuit at sim line 92 (production reverts here; sim returns 0 — see cross-cutting finding 1).
+- `distributeAmounts(s, amount, isRSR) = (per-destination amts list, dust = amount - sum(amts))`. The list is in the same order as the `Storage` list (sim) which corresponds to EnumerableSet insertion order in production.
+- `distributeAmounts_with_dao_fee` mirrors the production `totals()` inflation: only the rsr leg is inflated (sim line 207–217 mirroring production line 220–224); the rToken leg's `tokensPerShare` is unchanged. The DAO-fee residual `(totalShares' - paidOutShares) * tps` is computed exactly as production line 186.
+- `feeShareInflation` is defensive on malformed configs: returns 0 when `feeNumerator = 0` or `feeDenominator <= feeNumerator` (sim mirrors production's revert-via-checked-subtraction behaviour by returning a zero contribution rather than letting the math underflow).
+- The `DistResult.t` record bundles the conservation invariant `sum(amts) + daoFee + dust = amount` (achievable when `totalShares != 0`).
+
+### Implications for proof transferability
+
+1. The conservation invariant `sum(transferAmts) + dust = amount` (no DAO fee) and `sum(amts) + daoFee + dust = amount` (with DAO fee) is precisely what the simulation establishes. It transfers to production directly *iff*: (a) the caller has already validated `tokensPerShare != 0` (production reverts; sim returns 0), and (b) the EnumerableSet's iteration order matches the order of `Storage`.
+2. The auth gate (`require(caller == rsrTrader || rTokenTrader)`) is unmodeled — proofs about `distributeAmounts` apply to *any* caller. Production additionally requires the caller be one of the two RevenueTraders.
+3. The `erc20 == rsr || erc20 == rToken` identity check is unmodeled — sim's `isRSR` flag is treated as an arbitrary boolean. Production reverts if neither identity matches.
+4. The post-distribute `furnace.melt()` / `stRSR.payoutRewards()` calls (production lines 192–199) are unmodeled. Composition lemmas ("Distributor distributes then Furnace melts") cannot be stated against this simulation; they would need an integration file that threads both states.
+5. The DAO-fee leg coverage was added in the follow-up (`distributeAmounts_with_dao_fee`); legacy proofs against `distributeAmounts` apply only to deployments where `daoFeeRegistry` is unset OR `feeNumerator = 0`. Specific xchecks in `proofs/CAS_additional_findings.v` formalize the ⩾1% DAO fee bug pinned in the audit.
+6. The `MAX_DESTINATIONS = 100` and per-share `MAX_DISTRIBUTION = 10000` caps are constants in the sim but unenforced at write time (no `setDistribution`). Proofs assuming "the destinations list has length ≤ 100" must carry that as a Valid-style hypothesis.
 
 ## BackingManager
 
