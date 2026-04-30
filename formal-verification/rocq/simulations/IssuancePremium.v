@@ -26,6 +26,18 @@
 
     The CAS script in cas/issuance_premium/premium_curve.gp probes the
     invariants (P1..P6) on a 5-token stablecoin basket calibration.
+
+    Revert coverage:
+      Modeled:  [safeDiv_ceil] saturates at FIX_MAX on [b = 0] and
+                FIX_MAX-input (matches production [FixLib.safeDiv]
+                semantics — these are explicit saturation paths, not
+                reverts). All other [issuancePremium] paths return
+                FIX_ONE for the disabled / no-premium cases.
+      Deferred: input bounds via [Valid.input] (uint192 on each
+                price scalar).
+      Not modeled: any caller-context reverts in [BasketHandler]
+                that gate access to [issuancePremium] (lifecycle,
+                governance toggle).
 *)
 
 Require Import RocqOfSolidity.RocqOfSolidity.

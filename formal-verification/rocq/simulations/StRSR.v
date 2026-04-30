@@ -44,6 +44,21 @@
     [seizeRSR] operations, the ERC20 surface, and the withdrawal-leak
     mechanism. See [../../notes/simulation_fidelity_audit.md] for the
     full divergence list and the proof-transferability implications.
+
+    Revert coverage:
+      Modeled:  [payoutRewards] early-return when [now < lastPayout + 1]
+                (matches production's [_payoutRewards] check). No
+                explicit revert paths.
+      Deferred: [unstake]'s [amount <= totalStRSR] precondition is
+                carried by integration lemmas as a hypothesis; the
+                simulation does not check it. [Valid.t] holds the
+                non-negativity and ratio-band invariants.
+      Not modeled: the [withdraw]/[cancelUnstake] vesting-completion
+                paths (which check [availableAt <= now] and
+                [basketHandler.isReady() && fullyCollateralized()]),
+                era-reset triggers via [seizeRSR], withdrawal-leak
+                refresh requirements, ERC20 transfer reverts, governance
+                setter authentication.
 *)
 
 Require Import RocqOfSolidity.RocqOfSolidity.
@@ -57,6 +72,13 @@ Module StRSR.
 Import FixLib.
 
 Definition FIX_ONE_Z : Z := FIX_ONE.
+
+(** Production governance cap on [ratio] per StRSR.sol#L42:
+    [MAX_REWARD_RATIO = 1e14] (0.01% per period). Enforced by
+    [setRewardRatio]; the simulation doesn't model the setter but
+    carries the bound in [Valid.t] so all proofs operate within the
+    governance-enforced range. *)
+Definition MAX_REWARD_RATIO : Z := 10^14.
 
 (** A single withdrawal entry in the queue. [rsrAmount] is the locked
     RSR principal computed at the unstake-time rate; [availableAt] is
@@ -186,6 +208,53 @@ Definition unstake
     Storage.queue                   := enqueue s.(Storage.queue) w;
   |}.
 
+(** ---------- withdraw ----------
+
+    Pop the front entry of the queue if it has matured ([availableAt <= now])
+    and return the [rsrAmount] paid out to the staker. If the front is not
+    yet ready, the queue is unchanged and 0 is returned.
+
+    Note: the [totalRSRStaked] field is NOT decremented here — [unstake]
+    already moved that quantity out of the active stake pool when the
+    entry was enqueued. In the simulation's collapsed accounting,
+    [totalRSRStaked] tracks the active backing pool only; the queue
+    entries themselves represent the locked draft RSR. A user redemption
+    via [withdraw] just transfers the entry's [rsrAmount] from the
+    locked-in-queue pool to the staker's balance.
+
+    Production's [withdraw] takes an [endId] specifying how many entries
+    to claim in a batch. We model the simpler one-step pop here; batch
+    withdrawal is the iterated composition. The vesting check is
+    head-of-queue only because the FIFO invariant ([queue_fifo]) ensures
+    the head's [availableAt] is the smallest in the queue — so if the
+    head is not ready, none are.
+
+    Pre: [queue_fifo s.(queue)] (carried by [Valid.t]).
+
+    Diverges from production:
+      - Per-account state not modeled (sim aggregates everything).
+      - The [basketHandler.isReady() && fullyCollateralized()] gate is
+        not modeled — production reverts with [RTokenNotReady] if either
+        condition fails.
+      - The withdrawal-leak refresh is not modeled — production calls
+        [leakyRefresh(rsrAmount)] inline.
+*)
+Definition withdraw (s : Storage.t) (now : U256.t) : Storage.t * U256.t :=
+  match s.(Storage.queue) with
+  | [] => (s, 0)
+  | w :: rest =>
+    if w.(Withdrawal.availableAt) <=? now then
+      ({|
+        Storage.totalStRSR              := s.(Storage.totalStRSR);
+        Storage.totalRSRStaked          := s.(Storage.totalRSRStaked);
+        Storage.totalRewardsAccumulated := s.(Storage.totalRewardsAccumulated);
+        Storage.ratio                   := s.(Storage.ratio);
+        Storage.lastPayout              := s.(Storage.lastPayout);
+        Storage.queue                   := rest;
+      |}, w.(Withdrawal.rsrAmount))
+    else (s, 0)
+  end.
+
 (** ---------- payoutRewards ----------
 
     Computes the compound payout ratio
@@ -222,7 +291,7 @@ Module Valid.
     totalStRSR_nonneg     : 0 <= s.(Storage.totalStRSR);
     totalRSRStaked_nonneg : 0 <= s.(Storage.totalRSRStaked);
     rewards_nonneg        : 0 <= s.(Storage.totalRewardsAccumulated);
-    ratio_in_range        : 0 <= s.(Storage.ratio) <= FIX_ONE_Z;
+    ratio_in_range        : 0 <= s.(Storage.ratio) <= MAX_REWARD_RATIO;
     queue_ordered         : queue_fifo s.(Storage.queue);
   }.
 End Valid.

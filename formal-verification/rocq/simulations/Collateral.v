@@ -37,6 +37,17 @@
     a [refreshSoft] step driven by [pegPrice]. The state machine proofs
     work at the [markStatus]/[updateExposed] level, which is exactly what
     the CAS scripts in cas/collateral/ probe.
+
+    Revert coverage:
+      Modeled:  [markStatus] no-ops when already DISABLED ([wd <= now])
+                — terminal-state preservation, not a revert.
+      Deferred: well-formedness via [Valid.t] (uint48 timestamps,
+                uint192 prices, [delayUntilDefault <= 1209600]).
+      Not modeled: oracle-staleness reverts, basket-not-set reverts,
+                the cross-component reverts on [refresh] from
+                BasketHandler / AssetRegistry. Plugin-specific
+                overrides in subclasses (CTokenFiatCollateral etc.)
+                are entirely out of scope.
 *)
 
 Require Import RocqOfSolidity.RocqOfSolidity.

@@ -30,6 +30,20 @@
 
     Result.t is included for future revert-bearing extensions
     (e.g. totalShares == 0 will revert in production).
+
+    Revert coverage:
+      Modeled:  [computeSurplusSplit] returns [Result.Revert] when
+                [totalShares = 0] (matches the production
+                [require(totalShares > 0)] before the per-asset
+                division).
+      Deferred: input bounds via [Valid.bufferInputs] (uint192 on
+                each scalar, [backingBuffer <= MAX_BACKING_BUFFER]).
+      Not modeled: the rest of [forwardRevenue] — auth, RToken
+                interactions, basket-not-ready guards, recollateralization
+                state-machine transitions. The full [manageTokens] flow
+                is also out of scope. This simulation is the math
+                kernel only; see ../../notes/simulation_fidelity_audit.md
+                for the per-domain summary.
 *)
 
 Require Import RocqOfSolidity.RocqOfSolidity.

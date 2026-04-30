@@ -23,6 +23,19 @@
     Out of scope here (defer until they're needed downstream):
       - sqrt, divFix, divuu (Reserve uses these less frequently)
       - the full chained-operation surface (mulu_toUint, etc.)
+
+    Revert coverage:
+      Modeled:  [_safeWrap] returns [None] on uint192 overflow,
+                surfaced via [_opt]-suffixed variants ([mul_opt],
+                [div_opt], etc.). This matches production's [_safeWrap]
+                revert in [FixLib].
+      Deferred: input boundedness via [uint192_valid] (carried as
+                hypothesis in proofs/Fixed_safety.v).
+      Not modeled: uint256 overflow on the unchecked variants — sim
+                works in [Z]. Production reverts via Solidity 0.8's
+                checked arithmetic; the [_opt] wrappers cover the
+                uint192 boundary, but the inner uint256 multiplication
+                (e.g. inside [mulDiv256]) is not separately bounded.
 *)
 
 Require Import RocqOfSolidity.RocqOfSolidity.

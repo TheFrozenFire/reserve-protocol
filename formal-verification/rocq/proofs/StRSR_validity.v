@@ -157,4 +157,41 @@ Proof.
   exact (StRSRProofs.withdrawal_fifo q w).
 Qed.
 
+(** [queue_fifo] is preserved by popping the head: if the cons-cell is
+    ordered, so is its tail. Used directly by [withdraw_preserves_validity]
+    below. *)
+Lemma queue_fifo_tail (w : StRSR.Withdrawal.t) (rest : list StRSR.Withdrawal.t) :
+  StRSR.queue_fifo (w :: rest) ->
+  StRSR.queue_fifo rest.
+Proof.
+  intros Hfifo. destruct rest as [|w' rest'].
+  - simpl. exact I.
+  - simpl in Hfifo. destruct Hfifo as [_ Hrest]. exact Hrest.
+Qed.
+
+(** ===== withdraw_preserves_validity =====
+
+    [withdraw] pops the head of the queue if it has matured, otherwise
+    no-ops. In both cases the storage scalars are unchanged and the new
+    queue is either [rest] (preserving FIFO via [queue_fifo_tail]) or
+    the original queue. *)
+Lemma withdraw_preserves_validity
+    (s : StRSR.Storage.t) (now : U256.t) :
+  StRSR.Valid.t s ->
+  StRSR.Valid.t (fst (StRSR.withdraw s now)).
+Proof.
+  intros Hv. unfold StRSR.withdraw.
+  destruct s.(StRSR.Storage.queue) as [|w rest] eqn:Hq.
+  - (* empty queue: withdraw returns s unchanged. *)
+    simpl. exact Hv.
+  - (* nonempty queue. *)
+    destruct (w.(StRSR.Withdrawal.availableAt) <=? now) eqn:Hready.
+    + (* head ready: queue := rest, scalars unchanged. *)
+      destruct Hv as [Hst Hstk Hrew Hratio Hfifo].
+      simpl. constructor; simpl; auto.
+      rewrite Hq in Hfifo. apply (queue_fifo_tail w rest Hfifo).
+    + (* head not ready: returns s unchanged. *)
+      simpl. exact Hv.
+Qed.
+
 End StRSRValidity.

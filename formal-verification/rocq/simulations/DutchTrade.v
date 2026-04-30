@@ -18,6 +18,18 @@
     On-chain reads of [block.timestamp] are passed as explicit [now]; the
     sim is pure. We model the curve as a function of progression in D18
     (FIX_ONE = 10^18 scale) — same vocabulary as the production code.
+
+    Revert coverage:
+      Modeled:  none — [bidPrice] is total. Out-of-range [t] returns
+                the nearest endpoint instead of reverting.
+      Deferred: well-formedness of the auction via [Valid.t]
+                ([startTime < endTime], [worstPrice <= bestPrice],
+                positive bestPrice, decimals in range).
+      Not modeled: production's revert when called outside
+                [[startTime, endTime]]. Production's status-machine
+                guards on [bid()] / [settle()] (not modeled at the
+                state-transition level here). External transfer
+                failures during [bid()].
 *)
 
 Require Import RocqOfSolidity.RocqOfSolidity.

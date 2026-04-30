@@ -25,6 +25,20 @@
         extra div(_, FIX_ONE - slippage, CEIL); we expose the kernel piece
         as [coverDeficitSellAmount] and leave the full call as a follow-up
         when the harness needs it.
+
+    Revert coverage:
+      Modeled:  saturation behavior of [safeMulDiv] (returns
+                [FIX_MAX] on FIX_MAX-input or division by zero, instead
+                of reverting). Matches production semantics — these
+                are NOT revert paths in production either, they are
+                explicit saturation paths in [FixLib.safeMulDiv].
+      Deferred: input bounds via [Valid.buyInputs]: uint192 on each
+                scalar, [slippage <= FIX_ONE], [buyHigh > 0]. The last
+                two correspond to production [require]s in
+                [prepareTradeSell].
+      Not modeled: revert paths on the unchecked [mul] (uint192
+                overflow) — sim works in [Z]. Caller-context reverts
+                in [prepareTradeSell] (asset-registry lookups, etc.).
 *)
 
 Require Import RocqOfSolidity.RocqOfSolidity.

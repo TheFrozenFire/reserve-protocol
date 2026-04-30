@@ -18,6 +18,13 @@
       amount < 0  restore  (no cap on lastAvailable; the cap is enforced
                             lazily by [currentlyAvailable] on the next call)
       amount = 0  no-op
+
+    Revert coverage:
+      Modeled:  [revert_throttled] when amount > available (production
+                line 58, "supply change throttled").
+      Deferred: none — this library only has the one revert path.
+      Not modeled: governance auth on the storage struct (handled at
+                the calling contract level, not in ThrottleLib).
 *)
 
 Require Import RocqOfSolidity.RocqOfSolidity.

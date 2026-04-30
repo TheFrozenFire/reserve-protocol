@@ -219,9 +219,9 @@ Lemma StRSR_scalars_jointly_bounded
 Proof.
   intros [Hst_nn Hstk_nn Hrew_nn Hratio _] [Hst_hi Hstk_hi Hrew_hi].
   destruct Hratio as [_ Hratio_hi].
-  unfold StRSR.FIX_ONE_Z, FixLib.FIX_ONE, FixLib.FIX_SCALE in Hratio_hi.
+  unfold StRSR.MAX_REWARD_RATIO in Hratio_hi.
   unfold UINT256_MAX in *.
-  assert (Hpow : 10 ^ 18 <= 2 ^ 256 - 1) by (vm_compute; discriminate).
+  assert (Hpow : 10 ^ 14 <= 2 ^ 256 - 1) by (vm_compute; discriminate).
   lia.
 Qed.
 

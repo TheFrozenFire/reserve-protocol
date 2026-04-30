@@ -30,6 +30,14 @@
       - per-asset oracle calls
       - the basketHandler / assetRegistry indirection
       - reverts on FIX_MAX overflow
+
+    Revert coverage:
+      Modeled:  none — pure algebra over [RangeInputs].
+      Deferred: well-formedness of inputs via [Valid.inputs]
+                (8-field record).
+      Not modeled: FIX_MAX overflow on the inner per-asset
+                arithmetic (handled by [_safeWrap] in production), any
+                oracle-failure reverts.
 *)
 
 Require Import RocqOfSolidity.RocqOfSolidity.

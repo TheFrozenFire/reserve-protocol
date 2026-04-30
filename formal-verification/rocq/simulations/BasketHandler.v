@@ -28,6 +28,15 @@
     Companion CAS witnesses:
       cas/basket_handler/quote_rounding_direction.gp
       cas/basket_handler/quote_round_trip.gp
+
+    Revert coverage:
+      Modeled:  [redeem_one] returns 0 on [refAmt = 0] (avoids
+                div-by-zero; algebraically vacuous because production
+                doesn't store zero refAmts in the basket).
+      Deferred: well-formed basket as a precondition on [Storage].
+      Not modeled: basket-not-set lifecycle reverts, oracle-failure
+                reverts, asset-registry-mismatch reverts. The whole
+                basket-management lifecycle is outside this kernel.
 *)
 
 Require Import RocqOfSolidity.RocqOfSolidity.

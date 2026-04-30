@@ -351,36 +351,100 @@ simulation in the tree.
 
 ---
 
-# Recommended next steps if these gaps matter
+# Recommended next steps — status
 
-In approximate effort order:
+The recommendations from the original audit have been worked through.
+Status as of the audit-driven follow-up commits:
 
-1. **Truth-in-naming for storage bounds.** Rename `lastPayout_uint48`-style
-   fields where they bound at uint256 instead of uint48. Or better:
-   tighten the bounds. Trivial sweep across the `Valid.t` records.
+1. **Truth-in-naming for storage bounds. ✓ DONE.**
+   - Furnace `lastPayout_uint48` → `lastPayout_u256` (the bound is
+     UINT256_MAX, not UINT48_MAX; rename matches content).
+   - StRSR `ratio_in_range` tightened from `<= FIX_ONE` to
+     `<= MAX_REWARD_RATIO = 1e14` (production governance cap).
+   - All other type-named fields verified to match their actual bounds
+     (Throttle `lastTs_uint48`, Collateral `wd_uint48` /
+     `delay_uint48`, etc. are all honest).
+   - Dependent proofs in EndToEnd and StRSR_uint256_bounds updated to
+     use the new tighter MAX_REWARD_RATIO bound.
 
-2. **Document each simulation's revert coverage.** One header paragraph
-   per simulation enumerating the production reverts modeled vs the
-   ones deferred to `Valid`-hypothesis. Cheap, high-leverage.
+2. **Document each simulation's revert coverage. ✓ DONE.**
+   Each of the 13 simulations now has a "Revert coverage" paragraph
+   in its file header listing reverts modeled, deferred to
+   `Valid`-hypothesis, and not modeled at all.
 
-3. **Furnace `setRatio` ordering.** Verify whether any composition lemma
-   relies on the production's `melt-then-set` order. If yes, fix the
-   simulation; if no, document the divergence.
+3. **Furnace `setRatio` ordering. ✓ DONE.**
+   - No existing proof relies on the production melt-before-set
+     ordering; the divergence is dormant in the current proof tree.
+   - Added `setRatio_with_melt` as a production-faithful operation
+     that calls `melt` first (with the OLD ratio, capturing accrual)
+     before writing the new ratio. Available for future proofs that
+     care about ordering.
+   - Existing `setRatio` retained for proofs and witnesses where the
+     ordering is irrelevant; the docstring now flags the divergence
+     prominently.
 
-4. **Add `withdraw` to StRSR.** Smallest material extension; closes the
-   unstake lifecycle.
+4. **Add `withdraw` to StRSR. ✓ DONE.**
+   - New `withdraw` operation pops the front of the FIFO queue if
+     `availableAt <= now`, returning the rsrAmount paid out. Storage
+     scalars unchanged (consistent with the simulation's collapsed
+     accounting where the queue itself represents draft RSR).
+   - `withdraw_preserves_validity` lemma added to
+     `proofs/StRSR_validity.v`. Proof relies on a new helper
+     `queue_fifo_tail` (popping the head preserves FIFO).
+   - Production divergences explicitly documented in the operation's
+     comment: per-account state, `RTokenNotReady` gate, withdrawal-
+     leak refresh — all deferred.
 
-5. **Audit `_uint256_bounds.v` files for tightness.** Most should be
-   strengthened to match the production storage type, not the maximum
-   uint width.
+5. **Audit `_uint256_bounds.v` files for tightness. ✓ PARTIAL.**
+   Same finding as item 1. The current pass tightened the StRSR
+   `ratio` bound (which propagates through `StRSR_uint256_bounds.v`).
+   A full sweep of all `_uint256_bounds.v` files for further
+   tightening opportunities is a follow-up; the loose bounds that
+   remain (e.g. uint48 timestamps stored as `U256.t` without uint48
+   bound) are structural and need either a tighter `Valid.t` or a
+   model of production's uint48 truncation arithmetic — both larger
+   changes than fit this pass.
 
-6. **Per-domain operation surface expansion.** Each simulation covers a
-   subset of production operations. The biggest missing surfaces:
-   StRSR's `seizeRSR` and `withdraw`, BackingManager's full
-   `forwardRevenue` and `manageTokens`, BasketHandler's
-   `setPrimeBasket`/`refreshBasket`. Each is significant work.
+6. **Per-domain operation surface expansion. ✗ DEFERRED.**
+   The remaining big surfaces are substantial work and stay deferred:
 
-7. **DAO-fee leg in Distributor.** The auction-fee gap finding is
-   pinned as a counterexample but the simulation doesn't carry the
-   DAO-fee path. Adding it would let the proofs about share
-   conservation extend to the post-fee accounting.
+   - StRSR `seizeRSR` and `cancelUnstake`. `seizeRSR` requires
+     modeling era reset, which in turn requires a `era` /
+     `draftEra` field, separate `stakeRSR`/`draftRSR` pools, and the
+     `MAX_STAKE_RATE` saturation model. `cancelUnstake` is simpler in
+     principle (pop-the-back of the queue, convert rsrAmount back to
+     stake at the current rate) but the simulation's queue is a
+     `list ... ` with append-at-back; modeling LIFO removal cleanly
+     needs `List.removelast`/`List.last` plumbing. Both are
+     incremental from `withdraw` but not free.
+
+   - BackingManager's full `forwardRevenue` and `manageTokens`. The
+     simulation today is `BackingManagerForwardRevenueMath` — only
+     the math kernel from lines 218-262. The full operation surface
+     covers asset-registry interaction, trade triggering, and
+     basket-needs lifecycle; each of those needs its own simulation
+     module before the full `forwardRevenue` can be assembled.
+
+   - BasketHandler's `setPrimeBasket` / `refreshBasket`. Same shape
+     — the simulation today is `BasketHandlerQuoteMath`, covering
+     only `quote` semantics. The lifecycle operations require
+     governance state (basket nonce, prime/reference distinction),
+     `swapRegistered` semantics, and the asset-registry interaction.
+
+   These three are tracked as future work; the audit document now
+   serves as the scoping artifact for that effort.
+
+7. **DAO-fee leg in Distributor. ✓ DONE.**
+   - Added `distributeAmounts_with_dao_fee` alongside the existing
+     `distributeAmounts`. Models the production `totals()` inflation
+     (DAO fee only inflates rsrTotal) and the per-leg fee transfer
+     (`tps * (totalShares' - paidOutShares)` to the DAO recipient).
+   - New `DistResult.t` record bundles per-destination amounts, the
+     DAO-fee amount, and the residual dust. The conservation
+     invariant `sum(amts) + daoFee + dust = amount` is now expressible
+     across the DAO-fee path.
+   - Helper `feeShareInflation` mirrors production line 219-225 with
+     defensive zero-returns when the configuration is invalid (matches
+     production's revert via Solidity checked subtraction).
+   - `paidOutShares` helper sums the inner-loop share count for the
+     leg being distributed.

@@ -23,6 +23,19 @@
     Companion CAS witnesses:
       cas/gnosis_trade/min_buy_amount.gp
       cas/gnosis_trade/settlement_floor.gp
+
+    Revert coverage:
+      Modeled:  [worstCasePrice] returns 0 on [sellAmount = 0]
+                (avoids div-by-zero). [settle] early-returns with
+                [checked = false] when the trade returned 100% of
+                the sell tokens (matches production line 219 guard).
+      Deferred: well-formed inputs at the calling boundary.
+      Not modeled: any auth or status-machine reverts (init / settle
+                gating), Gnosis EasyAuction interaction failures,
+                cancellation-window enforcement (the boundary at
+                [cancellationEndTime] is computed but the revert if
+                cancellation is attempted past it lives in production
+                only).
 *)
 
 Require Import RocqOfSolidity.RocqOfSolidity.

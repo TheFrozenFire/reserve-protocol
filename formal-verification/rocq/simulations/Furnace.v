@@ -16,6 +16,19 @@
 
     [setRatio] caps [ratio] at [MAX_RATIO = 10^14] (0.01%/period) before
     storing. The simulation enforces the same cap.
+
+    Revert coverage:
+      Modeled:  [setRatio] returns [None] on [ratio > MAX_RATIO]
+                (production line 84, "invalid ratio").
+      Deferred: governance modifier on [setRatio] (sim treats setter
+                as available; production gates it on Main's governance
+                role).
+      Not modeled: production's [setRatio] calls [melt()] before
+                writing the new ratio. Sim writes directly. Composition
+                lemmas that rely on melt-before-set ordering will not
+                transfer to production. See
+                ../../notes/simulation_fidelity_audit.md cross-cutting
+                section 2 for details.
 *)
 
 Require Import RocqOfSolidity.RocqOfSolidity.
@@ -62,7 +75,16 @@ Definition melt (s : Storage.t) (now : U256.t) (currentBalance : U256.t)
     |} in
     (s', amount).
 
-(** [setRatio]: governance bound check. Returns [None] on invalid ratio. *)
+(** [setRatio]: governance bound check. Returns [None] on invalid ratio.
+
+    DIVERGENCE FROM PRODUCTION: production [setRatio] (Furnace.sol#L83-L90)
+    calls [melt()] *before* writing the new ratio, so accrual at the OLD
+    ratio is captured before the rate change takes effect. This [setRatio]
+    writes the ratio directly. Use [setRatio_with_melt] below for the
+    production-faithful composed operation; this one remains available for
+    proofs and witnesses that do not depend on the melt-then-set ordering
+    (e.g. the bound-check INV-RATIO and INV-RATIO-NEG lemmas in
+    proofs/Furnace.v, which are insensitive to whether melt was called). *)
 Definition setRatio (s : Storage.t) (ratio_ : U256.t) : option Storage.t :=
   if ratio_ <=? MAX_RATIO then
     Some {|
@@ -70,6 +92,27 @@ Definition setRatio (s : Storage.t) (ratio_ : U256.t) : option Storage.t :=
       Storage.lastPayout := s.(Storage.lastPayout);
       Storage.lastPayoutBal := s.(Storage.lastPayoutBal);
     |}
+  else None.
+
+(** [setRatio_with_melt]: production-faithful composition. Calls [melt]
+    at the OLD ratio first (capturing one period's worth of accrual),
+    then writes the new ratio. Returns the post-state and the amount
+    melted at the old ratio.
+
+    Source: Furnace.sol#L83-L90 — [melt(); ratio = ratio_;] inside the
+    [setRatio] body, after the [require(ratio_ <= MAX_RATIO)] check.
+    Returns [None] when [ratio_ > MAX_RATIO]. *)
+Definition setRatio_with_melt
+    (s : Storage.t) (ratio_ : U256.t) (now currentBalance : U256.t)
+    : option (Storage.t * U256.t) :=
+  if ratio_ <=? MAX_RATIO then
+    let '(s_after_melt, amount) := melt s now currentBalance in
+    Some
+      ({|
+        Storage.ratio         := ratio_;
+        Storage.lastPayout    := s_after_melt.(Storage.lastPayout);
+        Storage.lastPayoutBal := s_after_melt.(Storage.lastPayoutBal);
+      |}, amount)
   else None.
 
 (** Validity predicate. *)

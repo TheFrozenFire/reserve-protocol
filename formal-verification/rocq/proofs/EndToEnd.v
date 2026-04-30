@@ -83,8 +83,8 @@ Proof.
 Qed.
 
 (** StRSR's [ratio] is many orders of magnitude smaller than
-    [UINT256_MAX]: it lives in [0, FIX_ONE_Z] = [0, 10^18], whereas
-    [UINT256_MAX = 2^256 - 1 ≈ 1.16 * 10^77]. *)
+    [UINT256_MAX]: governance caps it at [MAX_REWARD_RATIO = 10^14],
+    whereas [UINT256_MAX = 2^256 - 1 ≈ 1.16 * 10^77]. *)
 Lemma stRSR_ratio_le_uint256_max
     (s : StRSR.Storage.t) :
   StRSR.Valid.t s ->
@@ -92,10 +92,10 @@ Lemma stRSR_ratio_le_uint256_max
 Proof.
   intros [_ _ _ Hratio _].
   destruct Hratio as [_ Hratio_hi].
-  unfold StRSR.FIX_ONE_Z, FixLib.FIX_ONE, FixLib.FIX_SCALE in Hratio_hi.
+  unfold StRSR.MAX_REWARD_RATIO in Hratio_hi.
   unfold UINT256_MAX.
-  (* 10^18 <= 2^256 - 1: the LHS is a tiny constant; trivially true. *)
-  assert (Hpow : 10 ^ 18 <= 2 ^ 256 - 1) by (vm_compute; discriminate).
+  (* 10^14 <= 2^256 - 1: the LHS is a tiny constant; trivially true. *)
+  assert (Hpow : 10 ^ 14 <= 2 ^ 256 - 1) by (vm_compute; discriminate).
   lia.
 Qed.
 
