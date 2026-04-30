@@ -45,35 +45,19 @@ A property typically progresses:
 
 ## Property catalog
 
-The Rocq tree organizes proofs into seven tiers per domain:
+The Rocq tree organizes proofs into seven per-domain tiers (simulation,
+invariants, cross-checks, validity preservation, composition,
+witnesses, uint256 bounds) plus cross-domain integration files and two
+system-level joint-invariant theorems. **Coverage is dense — every
+domain has all seven tiers populated.** Two formalized bug findings
+(PR #1285 deprecation sequencing; governance-conditional auction-fee
+`reportViolation` gap) are pinned as machine-checked counterexample
+theorems.
 
-| Tier | File pattern | Role |
-|---|---|---|
-| Simulation | `rocq/simulations/<Domain>.v` | Clean Gallina spec of the contract operations |
-| Invariants | `rocq/proofs/<Domain>.v` | Per-operation correctness lemmas |
-| Cross-checks | `rocq/proofs/<Domain>_xcheck.v` | `vm_compute; reflexivity` against CAS witness values |
-| Validity preservation | `rocq/proofs/<Domain>_validity.v` | Operation preserves `Valid.t` |
-| Composition | `rocq/proofs/<Domain>_chain.v` | Multi-step preservation (e.g. `setRatio → melt`) |
-| Witnesses | `rocq/proofs/<Domain>_witnesses.v` | Boundary-point reflex theorems |
-| uint256 bounds | `rocq/proofs/<Domain>_uint256_bounds.v` | Storage-state ceiling derivations |
-
-Above the per-domain tiers:
-
-| File | Role |
-|---|---|
-| `rocq/proofs/Integration_*.v` | Cross-domain composition (revenue path, supply decay, unstake lifecycle, etc.) |
-| `rocq/proofs/EndToEnd*.v` | System-level joint invariants combining 8 (storage) or 13 (storage + functional) domains |
-| `rocq/proofs/Distributor_deprecation_bug.v` | PR #1285 sequencing failure formalized as a counterexample theorem |
-| `rocq/proofs/CAS_additional_findings.v` | Auction-fee `reportViolation` gap (governance-conditional) |
-| `rocq/Audit.v` | Top-level handoff index — `Notation`-aliases for the load-bearing theorems by audit-friendly names |
-
-Coverage is dense: every domain has all seven tiers populated. The CAS
-layer has 26 scripts; the Rocq layer cross-checks each via either a
-`_xcheck.v` or `_witnesses.v` file. Numerical drift between the two
-layers fails the build.
-
-For a navigation start, read `rocq/Audit.v` from the top — it surfaces
-the most decision-relevant theorems in 7 sections.
+For the per-tier file-pattern table, navigation guidance, and proof
+discipline notes, see [`rocq/README.md`](rocq/README.md). For a
+navigation start, read [`rocq/Audit.v`](rocq/Audit.v) from the top —
+it surfaces the most decision-relevant theorems in 7 sections.
 
 ## Layout
 
@@ -105,48 +89,136 @@ formal-verification/
 │   ├── deprecation/             -- 1 script
 │   └── _export/                 -- meta: emits Foundry .t.sol from CAS witnesses
 ├── rocq/
+│   ├── README.md                -- proof-tree navigation + per-tier table
+│   ├── WISDOM.md                -- proof-discipline gotchas for contributors
 │   ├── _RocqProject             -- coqc load paths and target list
 │   ├── Audit.v                  -- handoff index of audit-relevant theorems
 │   ├── simulations/             -- 13 Gallina specs
 │   ├── proofs/                  -- per-tier proof files (~100 files)
 │   └── <auto-translated harnesses>.v  -- output of solc --ir-rocq
+├── notes/                       -- investigation artifacts + parked-
+│   ├── README.md                   workstream diagnostics
+│   ├── yul_equivalence_diagnostic.md
+│   └── probes/                  -- bisect probes for solc-rocq optimizer
 └── scripts/
     └── rocq-build               -- one-command compile of the proof tree
 ```
 
 ## Building
 
-The Rocq layer compiles natively (no Docker) once an `opam` switch with
-Coq 8.20.1 + `coq-hammer-tactics` + `coq-coqutil` + `coq-record-update`
-is installed alongside the upstream `rocq-of-solidity` library:
+The Rocq layer compiles natively (no Docker) once Coq 8.20.1 plus
+`coq-hammer-tactics`, `coq-coqutil`, `coq-record-update` are installed
+alongside a built upstream `rocq-of-solidity` checkout. The CAS layer
+needs PARI/GP. Once the prerequisites are in place:
 
 ```sh
-opam switch create rocq820 ocaml-base-compiler.4.14.1
-opam repo add coq-released https://coq.inria.fr/opam/released
-opam install coq.8.20.1 coq-hammer-tactics coq-coqutil coq-record-update
-bash scripts/rocq-build           # compiles the whole tree (~3 min)
-bash cas/run-check.sh             # runs the 26 CAS scripts (~10 sec)
+# from formal-verification/, with rocq-of-solidity built somewhere
+# pointed to by $ROCQ_TREE (default $HOME/git/reserve/_tools/rocq-of-solidity):
+OPAM_SWITCH=rocq820 bash scripts/rocq-build   # ~3 min, compiles the proof tree
+bash cas/run-check.sh                          # ~10 sec, runs 26 CAS scripts
 ```
 
-Docker is used only for the `solc-rocq` auto-translation runs (the path
-that emits the Yul-derived Rocq from `contracts/<Harness>.sol`). The
-proof compilation and CAS suite both run natively.
+The CI workflow at `.github/workflows/formal-verification.yml` runs
+both stages on a fresh Ubuntu runner; trigger it manually from the
+Actions tab. It mirrors the Debian install steps below and is the
+definitive reference for "what works on a clean machine."
+
+### Install prerequisites
+
+The proof tree depends on **Coq 8.20.1** specifically (`vm_compute`
+witness reduction and the `coq-hammer-tactics` reconstruction APIs are
+version-sensitive). The instructions below set up an isolated opam
+switch so it doesn't conflict with any other Coq version on your
+machine.
+
+#### macOS (Homebrew)
+
+```sh
+brew install opam pari
+opam init -y --bare
+opam switch create rocq820 ocaml-base-compiler.4.14.1
+opam repo add --switch=rocq820 coq-released https://coq.inria.fr/opam/released
+opam install --switch=rocq820 -y \
+  coq.8.20.1 coq-hammer-tactics coq-coqutil coq-record-update
+
+# Build the upstream rocq-of-solidity library:
+git clone https://github.com/formal-land/rocq-of-solidity \
+  ~/git/reserve/_tools/rocq-of-solidity
+cd ~/git/reserve/_tools/rocq-of-solidity/rocq/RocqOfSolidity
+eval "$(opam env --switch=rocq820 --set-switch)"
+make all
+```
+
+#### Debian / Ubuntu
+
+```sh
+sudo apt-get update
+sudo apt-get install -y opam pari-gp build-essential m4 unzip git
+opam init -y --bare --disable-sandboxing
+opam switch create rocq820 ocaml-base-compiler.4.14.1
+opam repo add --switch=rocq820 coq-released https://coq.inria.fr/opam/released
+opam install --switch=rocq820 -y \
+  coq.8.20.1 coq-hammer-tactics coq-coqutil coq-record-update
+
+git clone https://github.com/formal-land/rocq-of-solidity \
+  ~/git/reserve/_tools/rocq-of-solidity
+cd ~/git/reserve/_tools/rocq-of-solidity/rocq/RocqOfSolidity
+eval "$(opam env --switch=rocq820 --set-switch)"
+make all
+```
+
+#### Arch Linux
+
+```sh
+sudo pacman -S --needed opam pari base-devel git
+opam init -y --bare
+opam switch create rocq820 ocaml-base-compiler.4.14.1
+opam repo add --switch=rocq820 coq-released https://coq.inria.fr/opam/released
+opam install --switch=rocq820 -y \
+  coq.8.20.1 coq-hammer-tactics coq-coqutil coq-record-update
+
+git clone https://github.com/formal-land/rocq-of-solidity \
+  ~/git/reserve/_tools/rocq-of-solidity
+cd ~/git/reserve/_tools/rocq-of-solidity/rocq/RocqOfSolidity
+eval "$(opam env --switch=rocq820 --set-switch)"
+make all
+```
+
+### Build script flags
+
+`scripts/rocq-build` accepts environment-variable overrides if your
+layout differs from the defaults:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ROCQ_TREE` | `$HOME/git/reserve/_tools/rocq-of-solidity` | Path to a built rocq-of-solidity checkout |
+| `PROTOCOL_TREE` | self-located from script path | Path to this repository |
+| `OPAM_SWITCH` | (unset; uses `coqc` from PATH) | Name of the opam switch to load |
+
+### What runs in Docker (and why)
+
+Docker is used only for the `solc-rocq` auto-translation runs (the
+path that emits the Yul-derived Rocq from `contracts/<Harness>.sol`).
+The amd64 ELF `solc-rocq` binary is invoked via Docker on non-Linux
+hosts. Proof compilation and the CAS suite both run natively — no
+Docker required.
 
 ## Parked workstreams
 
 Two extension paths were investigated and parked with diagnostic notes:
 
 1. **Yul-equivalence proofs** (`run_<fn>` lemmas tying the simulations
-   to the auto-translated Yul-derived Rocq) need an upstream change in
-   `rocq-of-solidity`: the runtime substrate has no `Impossible`
-   constructor in `RunO.t`, so any function reading `block.timestamp`
-   has no inhabitant of the equivalence predicate. Even pure FixLib
-   functions are blocked structurally, since the harness translations
-   don't emit shallow companion files (the upstream ERC20 sample does).
+   to the auto-translated Yul-derived Rocq). Two distinct substrate
+   gaps in upstream `rocq-of-solidity`: the semantic gap (no
+   `Impossible` constructor in `RunO.t` for `block.timestamp`) and the
+   structural gap (harness translations don't emit shallow companion
+   files). Full diagnosis with concrete unblocking steps in
+   [`notes/yul_equivalence_diagnostic.md`](notes/yul_equivalence_diagnostic.md).
 2. **Auto-translation campaign** beyond the math harnesses: `solc-rocq`
    exhibits unpredictable optimizer crashes on broader Solidity inputs.
    The harness-shape strategy (storage + constructor + non-pure external
    entry points, no inheritance) is what makes the current translations
    reliably emit. Translating, e.g., the full RToken contract would
    require either a bug-fix campaign upstream or hand-written
-   simplifications.
+   simplifications. Bisect probes for fresh crashes live under
+   [`notes/probes/`](notes/probes/).

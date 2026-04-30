@@ -3,38 +3,26 @@
 # Compiles simulations, proofs, and cross-checks against the native
 # rocq-of-solidity library.
 #
-# Prereqs (one-time):
+# Prerequisites: see ../README.md for platform install instructions
+# (macOS / Debian / Arch / NixOS). In short:
+#   - Coq 8.20.1, coq-hammer-tactics, coq-coqutil, coq-record-update
+#   - A compiled rocq-of-solidity checkout
 #
-# 1. An opam switch with Coq 8.20.1 and the proof dependencies:
-#
-#      opam switch create rocq820 ocaml-base-compiler.4.14.1
-#      opam repo add coq-released https://coq.inria.fr/opam/released
-#      opam install coq.8.20.1 coq-hammer-tactics coq-coqutil coq-record-update
-#
-# 2. A compiled rocq-of-solidity tree. Clone and build the upstream:
-#
-#      git clone https://github.com/formal-land/rocq-of-solidity \
-#        ~/git/reserve/_tools/rocq-of-solidity
-#      cd ~/git/reserve/_tools/rocq-of-solidity/rocq/RocqOfSolidity
-#      eval "$(opam env --switch=rocq820 --set-switch)"
-#      make all
-#
-# Override locations via env vars if your layout differs:
-#
-#      ROCQ_TREE=/path/to/rocq-of-solidity \
-#      PROTOCOL_TREE=/path/to/this/repo \
-#        bash scripts/rocq-build
-#
-# Note: Docker (rocq-build:full image) is still required for solc-rocq
-# auto-translation runs (see scripts/solc-rocq), but not for proof
-# compilation.
+# Override locations / opam switch via env vars if your layout differs:
+#   ROCQ_TREE       Path to a built rocq-of-solidity checkout.
+#                   Default: $HOME/git/reserve/_tools/rocq-of-solidity
+#   PROTOCOL_TREE   Path to this repository. Default: self-locate from script.
+#   OPAM_SWITCH     Name of the opam switch to load. If unset, the script
+#                   uses whichever switch coqc 8.20.1 happens to be on; if
+#                   coqc is already on PATH (e.g. from the system package
+#                   manager or a CI install), no opam load is performed.
 #
 # Usage: bash scripts/rocq-build [<file.v> ...]
 #   With no args, compiles all .v files listed in rocq/_RocqProject in order.
 
 set -euo pipefail
 
-# Default to a sibling layout under ~/git/reserve/, but accept overrides.
+# Default to a sibling layout under $HOME/git/reserve/, but accept overrides.
 ROCQ_TREE="${ROCQ_TREE:-$HOME/git/reserve/_tools/rocq-of-solidity}"
 # PROTOCOL_TREE defaults to two levels up from this script.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,7 +35,7 @@ if [[ ! -d "$ROCQ_TREE/rocq/RocqOfSolidity" ]]; then
 error: rocq-of-solidity not found at:
   $ROCQ_TREE/rocq/RocqOfSolidity
 
-Set ROCQ_TREE to its parent or clone it via:
+Set ROCQ_TREE to its parent, or clone the upstream:
   git clone https://github.com/formal-land/rocq-of-solidity "\$ROCQ_TREE"
 EOF
   exit 2
@@ -56,22 +44,41 @@ fi
 if [[ ! -f "$ROCQ_TREE/rocq/RocqOfSolidity/RocqOfSolidity.vo" ]]; then
   cat >&2 <<EOF
 error: rocq-of-solidity is not built. Run:
-  cd "$ROCQ_TREE/rocq/RocqOfSolidity" && eval "\$(opam env --switch=rocq820 --set-switch)" && make all
+  cd "$ROCQ_TREE/rocq/RocqOfSolidity" && make all
 EOF
   exit 3
 fi
 
-eval "$(opam env --switch=rocq820 --set-switch)"
+# Load opam env if requested, or if coqc is not already on PATH.
+# CI workflows typically have coqc on PATH directly and don't need opam.
+if [[ -n "${OPAM_SWITCH:-}" ]]; then
+  if ! command -v opam >/dev/null 2>&1; then
+    echo "error: OPAM_SWITCH=$OPAM_SWITCH set but opam not found on PATH" >&2
+    exit 4
+  fi
+  eval "$(opam env --switch="$OPAM_SWITCH" --set-switch)"
+elif ! command -v coqc >/dev/null 2>&1 && command -v opam >/dev/null 2>&1; then
+  # Fallback: try the default opam env.
+  eval "$(opam env)"
+fi
 
 if ! command -v coqc >/dev/null 2>&1; then
   cat >&2 <<EOF
-error: coqc not found on PATH after opam env load.
-Did you create the rocq820 switch? Run:
-  opam switch create rocq820 ocaml-base-compiler.4.14.1
-  opam repo add coq-released https://coq.inria.fr/opam/released
-  opam install coq.8.20.1 coq-hammer-tactics coq-coqutil coq-record-update
+error: coqc not found on PATH.
+See ../README.md for install instructions, or set OPAM_SWITCH=<name>
+to load the appropriate opam switch.
 EOF
-  exit 4
+  exit 5
+fi
+
+# Verify Coq version: the proof tree depends on Coq 8.20.x specifically.
+COQ_VERSION="$(coqc --version | head -1 | sed -E 's/.*version ([0-9]+\.[0-9]+).*/\1/')"
+if [[ "$COQ_VERSION" != "8.20" ]]; then
+  cat >&2 <<EOF
+warning: this proof tree targets Coq 8.20.x; found $COQ_VERSION.
+Continuing — most tactics work across 8.19/8.21 — but if you hit
+unexplained tactic failures, check Coq version compatibility.
+EOF
 fi
 
 if [[ $# -eq 0 ]]; then

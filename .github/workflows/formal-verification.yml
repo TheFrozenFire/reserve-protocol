@@ -1,0 +1,82 @@
+name: Formal verification
+
+# Manual trigger only for now. The proof tree compiles in ~5-10 min on a
+# free-tier GitHub-hosted runner; the CAS suite runs in <30 sec. Add an
+# `on: pull_request` trigger that watches `formal-verification/**` if you
+# want it to gate merges.
+on:
+  workflow_dispatch:
+
+jobs:
+  rocq-proofs:
+    name: Compile Rocq proof tree
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout protocol
+        uses: actions/checkout@v4
+
+      - name: Checkout rocq-of-solidity
+        uses: actions/checkout@v4
+        with:
+          repository: formal-land/rocq-of-solidity
+          path: _tools/rocq-of-solidity
+          # Pin a known-good rev — bump deliberately when the upstream
+          # substrate changes. Leaving as `main` makes the workflow
+          # break under our feet on upstream API drift.
+          ref: main
+
+      - name: Set up OCaml
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: 4.14.1
+          opam-repositories: |
+            default: https://opam.ocaml.org
+            coq-released: https://coq.inria.fr/opam/released
+
+      - name: Install Coq + proof dependencies
+        run: |
+          opam install -y \
+            coq.8.20.1 \
+            coq-hammer-tactics.1.3.2+8.20 \
+            coq-coqutil \
+            coq-record-update
+
+      - name: Compile rocq-of-solidity library
+        run: |
+          eval "$(opam env)"
+          cd _tools/rocq-of-solidity/rocq/RocqOfSolidity
+          make all
+
+      - name: Compile Reserve formal-verification proof tree
+        env:
+          ROCQ_TREE: ${{ github.workspace }}/_tools/rocq-of-solidity
+          PROTOCOL_TREE: ${{ github.workspace }}
+        run: |
+          eval "$(opam env)"
+          bash formal-verification/scripts/rocq-build
+
+      - name: Verify zero admits
+        run: |
+          if grep -rnE "^[[:space:]]*Admitted\.|^[[:space:]]*admit\.|^[[:space:]]*Abort\." \
+               --include='*.v' formal-verification/rocq/; then
+            echo "::error::Found admits in proof tree" >&2
+            exit 1
+          fi
+          echo "All proofs are complete (no Admitted, admit, or Abort)."
+
+  cas-suite:
+    name: Run CAS algebraic verification suite
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout protocol
+        uses: actions/checkout@v4
+
+      - name: Install PARI/GP
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pari-gp
+
+      - name: Run CAS suite
+        run: bash formal-verification/cas/run-check.sh
