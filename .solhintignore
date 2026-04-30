@@ -21,3 +21,10 @@ contracts/plugins/assets/compound/vendor
 contracts/plugins/assets/curve/crv
 contracts/plugins/assets/curve/cvx
 contracts/plugins/governance/vendor
+
+# Formal-verification harness inputs to solc-rocq (not deployed contracts).
+# _relaxed/ contains pragma-relaxed copies of already-ignored Fixed.sol; the
+# math harnesses and bisect probes are minimal fixtures whose shape is
+# constrained by what the auto-translator can ingest, not by lint style.
+
+formal-verification/contracts
