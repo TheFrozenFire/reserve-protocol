@@ -182,6 +182,7 @@ layout differs from the defaults:
 | `ROCQ_TREE` | `$HOME/git/reserve/_tools/rocq-of-solidity` | Path to a built rocq-of-solidity checkout |
 | `PROTOCOL_TREE` | self-located from script path | Path to this repository |
 | `OPAM_SWITCH` | (unset; uses `coqc` from PATH) | Name of the opam switch to load |
+| `RB_TIMEOUT` | `180` | Per-file coqc timeout in seconds. A tactic explosion (see `rocq/WISDOM.md` R001) pins coqc at 100% CPU indefinitely; the timeout fails the build with a `TIMEOUT: <file>` message instead. Override for genuinely slow files. Requires `timeout` (Linux) or `gtimeout` (macOS via `brew install coreutils`). |
 
 ### What runs in Docker (and why)
 

@@ -95,12 +95,53 @@ else
   files=("$@")
 fi
 
+# Per-file timeout. Most files compile in <10s; the slow ones (chain_extras,
+# integration suites) take 30-60s. The 180s default gives generous headroom
+# while making a tactic-explosion hang (the WISDOM.md R001 powu/destruct trap)
+# obvious within 3 minutes instead of pinning coqc indefinitely. Override with
+# RB_TIMEOUT=<seconds> for tighter or looser budgets.
+RB_TIMEOUT="${RB_TIMEOUT:-180}"
+
+# Resolve a `timeout`-equivalent command. GNU coreutils ships `timeout` on
+# Linux and `gtimeout` on macOS (via `brew install coreutils`). We require
+# one of them — running coqc unwrapped means a single stuck file hangs the
+# whole build indefinitely, which has happened often enough to warrant
+# making this a hard requirement of the build script.
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_CMD=timeout
+elif command -v gtimeout >/dev/null 2>&1; then
+  TIMEOUT_CMD=gtimeout
+else
+  cat >&2 <<EOF
+error: no \`timeout\` (Linux) or \`gtimeout\` (macOS) on PATH. Without one,
+       a single stuck coqc invocation hangs the build indefinitely.
+
+  macOS:  brew install coreutils
+  Debian: apt-get install coreutils  (usually preinstalled)
+  Arch:   pacman -S coreutils         (usually preinstalled)
+EOF
+  exit 7
+fi
+
 for f in "${files[@]}"; do
   echo "==> coqc $f"
-  coqc -R "$ROCQ_TREE/rocq/RocqOfSolidity" RocqOfSolidity \
-       -R "$RESERVE_ROCQ" Reserve \
-       -impredicative-set -w -stdlib-vector \
-       "$RESERVE_ROCQ/$f"
+  if ! "$TIMEOUT_CMD" --kill-after=5 "$RB_TIMEOUT" \
+       coqc -R "$ROCQ_TREE/rocq/RocqOfSolidity" RocqOfSolidity \
+            -R "$RESERVE_ROCQ" Reserve \
+            -impredicative-set -w -stdlib-vector \
+            "$RESERVE_ROCQ/$f"; then
+    rc=$?
+    if [[ $rc -eq 124 ]]; then
+      cat >&2 <<EOF
+
+TIMEOUT: $f did not finish within ${RB_TIMEOUT}s.
+This usually means a tactic explosion (see WISDOM.md R001 — mark FixLib
+operations Opaque before destructs/inductions on terms that contain them).
+Override the budget with RB_TIMEOUT=<seconds> if the file is genuinely slow.
+EOF
+    fi
+    exit $rc
+  fi
 done
 
 echo "All Rocq targets compiled successfully."
