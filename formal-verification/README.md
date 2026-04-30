@@ -64,37 +64,20 @@ it surfaces the most decision-relevant theorems in 7 sections.
 ```
 formal-verification/
 ├── README.md                    -- this file (methodology + layout + build)
-├── contracts/                   -- Solidity harnesses for solc --ir-rocq
-│   ├── _relaxed/                -- pragma-relaxed copies (^0.8.28) of FixLib + ThrottleLib
-│   ├── ThrottleHarness.sol
-│   ├── FurnaceMathHarness.sol
-│   └── ...                      -- one harness per domain
-├── cas/                         -- PARI/GP scripts
-│   ├── README.md
-│   ├── WISDOM.md
-│   ├── run-check.sh             -- runs the suite (26 scripts)
-│   ├── fixlib/                  -- 4 scripts
-│   ├── throttle/                -- 1 script
-│   ├── furnace/                 -- 1 script
-│   ├── rebalance/               -- 3 scripts
-│   ├── strsr/                   -- 2 scripts
-│   ├── distributor/             -- 1 script
-│   ├── trade_lib/               -- 2 scripts
-│   ├── dutch_trade/             -- 2 scripts
-│   ├── gnosis_trade/            -- 2 scripts
-│   ├── basket_handler/          -- 2 scripts
-│   ├── backing_manager/         -- 2 scripts
-│   ├── collateral/              -- 2 scripts
-│   ├── issuance_premium/        -- 1 script
-│   ├── deprecation/             -- 1 script
-│   └── _export/                 -- meta: emits Foundry .t.sol from CAS witnesses
+├── contracts/                   -- Solidity harnesses for solc --ir-rocq (one per domain)
+│   └── _relaxed/                -- pragma-relaxed copies (^0.8.28) of FixLib + ThrottleLib
+├── cas/                         -- PARI/GP scripts (one subdir per domain)
+│   ├── README.md                -- per-script index and probe descriptions
+│   ├── WISDOM.md                -- script-authoring gotchas
+│   ├── run-check.sh             -- runs the suite
+│   └── _export/                 -- emits Foundry .t.sol regression cases from CAS witnesses
 ├── rocq/
 │   ├── README.md                -- proof-tree navigation + per-tier table
 │   ├── WISDOM.md                -- proof-discipline gotchas for contributors
 │   ├── _RocqProject             -- coqc load paths and target list
 │   ├── Audit.v                  -- handoff index of audit-relevant theorems
-│   ├── simulations/             -- 13 Gallina specs
-│   ├── proofs/                  -- per-tier proof files (~100 files)
+│   ├── simulations/             -- Gallina specs (one per domain)
+│   ├── proofs/                  -- per-tier proof files
 │   └── <auto-translated harnesses>.v  -- output of solc --ir-rocq
 ├── notes/                       -- investigation artifacts + parked-
 │   ├── README.md                   workstream diagnostics
@@ -114,8 +97,8 @@ needs PARI/GP. Once the prerequisites are in place:
 ```sh
 # from formal-verification/, with rocq-of-solidity built somewhere
 # pointed to by $ROCQ_TREE (default $HOME/git/reserve/_tools/rocq-of-solidity):
-OPAM_SWITCH=rocq820 bash scripts/rocq-build   # ~3 min, compiles the proof tree
-bash cas/run-check.sh                          # ~10 sec, runs 26 CAS scripts
+OPAM_SWITCH=rocq820 bash scripts/rocq-build   # compile the proof tree
+bash cas/run-check.sh                          # run the CAS suite
 ```
 
 The CI workflow at `.github/workflows/formal-verification.yml` runs

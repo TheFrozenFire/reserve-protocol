@@ -22,8 +22,6 @@ contracts/
 ├── DistributorMathHarness.sol  -- distributeAmounts share split
 ├── StandaloneThrottle.sol      -- self-contained Throttle (no _relaxed/ deps)
 └── _relaxed/                   -- pragma-relaxed copies (^0.8.28) of FixLib + Throttle
-    ├── Fixed.sol
-    └── Throttle.sol
 ```
 
 Investigation artifacts (`_probe/`) used to characterize the

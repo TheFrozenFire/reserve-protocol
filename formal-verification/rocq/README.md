@@ -6,17 +6,16 @@ verification suite next to it: CAS finds boundary witnesses; Rocq pins
 them as numerical reflex theorems and proves the surrounding invariants
 formally.
 
-860 statements (Lemma + Theorem + audit Notation), zero admits, ~3:45
-clean rebuild on Apple Silicon native (no Docker). See `../README.md`
-for the dual-track methodology.
+Zero admits across the tree (the CI workflow grep-checks this). See
+`../README.md` for the dual-track methodology.
 
 ## Start here
 
 `Audit.v` is the navigation entry point. It re-exports the load-bearing
-theorems via `Notation` under audit-friendly names, organized into 7
-sections (bug findings, Certora mitigation, Throttle safety, Furnace
-correctness, Distributor conservation, Collateral state machine,
-system-level joint invariant). Compiles in <1 second; reads top-down.
+theorems via `Notation` under audit-friendly names, organized by
+section: bug findings, Certora mitigation, Throttle safety, Furnace
+correctness, Distributor conservation, Collateral state machine, and
+the system-level joint invariant. Reads top-down.
 
 For a deeper read, the per-domain proof tier is laid out below.
 
@@ -27,11 +26,6 @@ rocq/
 ├── Audit.v                       -- handoff index of audit-relevant theorems
 ├── _RocqProject                  -- coqc load paths and target list
 ├── simulations/                  -- Gallina specs (one file per domain)
-│   ├── Throttle.v       Fixed.v        Furnace.v
-│   ├── Distributor.v    BackingManager.v   Rebalance.v
-│   ├── StRSR.v          TradeLib.v         BasketHandler.v
-│   ├── DutchTrade.v     GnosisTrade.v      Collateral.v
-│   └── IssuancePremium.v
 └── proofs/
     ├── <Domain>.v                -- per-operation correctness invariants
     ├── <Domain>_xcheck.v         -- vm_compute reflexivity vs CAS witnesses
@@ -62,9 +56,9 @@ Every domain has up to seven tiers of proofs:
 | Witnesses | `proofs/<Domain>_witnesses.v` | Boundary-point reflex theorems |
 | uint256 bounds | `proofs/<Domain>_uint256_bounds.v` | Storage-state ceiling derivations |
 
-Coverage is full across 13 domains: Throttle, Fixed, Furnace,
-Distributor, BackingManager, Rebalance, StRSR, TradeLib, BasketHandler,
-DutchTrade, GnosisTrade, Collateral, IssuancePremium.
+Domains covered: Throttle, Fixed, Furnace, Distributor, BackingManager,
+Rebalance, StRSR, TradeLib, BasketHandler, DutchTrade, GnosisTrade,
+Collateral, IssuancePremium. Every domain has all seven tiers populated.
 
 ## Build
 
