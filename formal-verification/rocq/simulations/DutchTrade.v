@@ -150,6 +150,8 @@ Definition bidAmount_floor_variant (a : Auction.t) (price : Z) : Z :=
   else
     mul_floor * (10 ^ (- shift)).
 
+Definition UINT48_MAX : Z := 2 ^ 48 - 1.
+
 (** ---- Validity predicate: the type-level invariants the contract enforces. ---- *)
 Module Valid.
   Record t (a : Auction.t) : Prop := {
@@ -159,6 +161,11 @@ Module Valid.
     worstPrice_nonneg : 0 <= a.(Auction.worstPrice);
     sellAmount_nonneg : 0 <= a.(Auction.sellAmount);
     buyDecimals_range : 0 <= a.(Auction.buyDecimals) <= 36;
+    (** Production storage: [startTime] and [endTime] are uint48
+        (DutchTrade.sol#L57-L58). The bound surfaces here so the sim's
+        reachable-state set matches what production can hold. *)
+    startTime_uint48 : 0 <= a.(Auction.startTime) <= UINT48_MAX;
+    endTime_uint48   : 0 <= a.(Auction.endTime) <= UINT48_MAX;
   }.
 End Valid.
 

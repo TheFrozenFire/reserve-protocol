@@ -189,3 +189,81 @@ auto-generated Yul-derived Rocq. They are:
 `.gitignore` does not exclude them by extension (we want to track our
 hand-written `.v` files). Convention: do not add them to
 `_RocqProject` and do not `git add` them.
+
+## R010: Opaque scope is a Goldilocks problem
+
+R001 says mark FixLib operations `Opaque` before destructs. The full
+story is more nuanced when the destruct is on a domain-level function
+that *contains* FixLib calls — e.g. `BackingManager.computeSurplusSplit`,
+`BackingManager.forwardRevenueIter`. Three regimes:
+
+- **All transparent** → `cbn`/`destruct` unfolds FixLib operations
+  inside the goal; the term explodes. Build pins coqc at 100% CPU
+  indefinitely. (R001's headline failure mode.)
+
+- **Domain function opaque too** → proofs that `unfold computeSurplusSplit`
+  to expose its branches fail with `computeSurplusSplit is opaque`.
+  Going too broad breaks lemmas that legitimately need the unfolded
+  form.
+
+- **FixLib opaque, domain function transparent, domain function's
+  *outer wrapper* opaque** → the sweet spot. The domain function can
+  unfold to expose its `if/match` structure; the FixLib operations
+  inside it stay symbolic; the outer wrapper (e.g. `forwardRevenueIter`
+  vs `forwardRevenueIter_aux`) is opaque so a `destruct` on it doesn't
+  trigger evaluation through the entire iteration.
+
+When you're writing proofs that span a domain function + its inner
+FixLib content + its outer iteration wrapper, set the Opaque list at
+exactly two layers: FixLib primitives, and the iteration wrapper.
+Leave the middle layer transparent.
+
+## R011: Coq 8.20 nested intro pattern parser quirk
+
+The pattern `[X [Y Z]]` (right-nested conjunction destructor) trips
+the Coq 8.20 parser when the identifiers contain underscores:
+
+```coq
+(* fails with "Syntax error: '|' or ']' expected" *)
+pose proof (lemma_returning_3_conj args) as [Hr_nn [Ht_nn Hd_nn]].
+
+(* parses cleanly, identical semantics *)
+pose proof (lemma_returning_3_conj args) as Hnn.
+destruct Hnn as (Hr_nn & Ht_nn & Hd_nn).
+```
+
+The conj-pattern shorthand `(X & Y & Z)` is the safe form. Use it for
+any nested destructor with underscore-bearing names. This is purely
+a lexer issue — the semantics are identical — but it costs an
+otherwise inexplicable build failure when you don't know about it.
+
+## R012: Per-file build timeout is mandatory
+
+A tactic explosion (the R001 / R010 patterns) can pin coqc at 100%
+CPU indefinitely. Without a per-file timeout, a single bad file
+hangs the whole build. The build script wraps each `coqc` invocation
+with `timeout` (Linux) or `gtimeout` (macOS, via `brew install
+coreutils`). Default budget is 180s; override with `RB_TIMEOUT=<sec>`.
+
+If a build fires the timeout, the diagnostic points at WISDOM.md
+R001 — that's almost always the cause. Don't bypass the timeout
+without first verifying the file *needs* the longer budget; it's
+much more likely you have an Opaque hole.
+
+## R013: Two-version operations are a maintenance trap
+
+When extending a simulation to model production semantics more
+faithfully (e.g. Furnace's `setRatio_with_melt` calling `melt` first
+to capture old-ratio accrual; Distributor's
+`distributeAmounts_with_dao_fee` modeling the DAO fee leg), the
+temptation is to add the new version *alongside* the existing simpler
+one. This is dangerous: a future proof writer reaching for the
+simpler version unwittingly picks a model that production doesn't
+exhibit. The proof is technically correct but the claim it supports
+is narrower than the reader thinks.
+
+Pick a single canonical version. If both are needed (e.g. for proofs
+that don't care about ordering), make the simpler one a derived
+specialization (`setRatio s r := snd (setRatio_with_melt s r 0 0)`)
+or rename it explicitly (`setRatio_unordered`) so the production
+mismatch is in the name itself.

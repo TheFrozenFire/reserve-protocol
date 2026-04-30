@@ -99,6 +99,22 @@ Fixpoint transferAmts_aux
     cons (tps * shareOf isRSR share) (transferAmts_aux rest tps isRSR)
   end.
 
+(** [distributeAmounts]: the *no-DAO-fee* specialization.
+
+    DIVERGENCE FROM PRODUCTION: production [distribute()] always
+    consults [main.daoFeeRegistry()] (Distributor.sol#L177-L190); when
+    a fee recipient is configured, the residual
+    [tps * (totalShares - paidOutShares)] flows to that recipient and
+    [totalShares] is inflated via [feeShareInflation] inside [totals()]
+    (line 212-226). This simpler [distributeAmounts] models the
+    fee-disabled path only.
+
+    Use [distributeAmounts_with_dao_fee] (below) for the production-
+    faithful composition. This simpler version remains available for
+    proofs that target the inner-loop conservation invariant and are
+    insensitive to the DAO-fee leg, but those proofs do NOT generalize
+    to a deployment with a non-zero [feeNumerator]. The audit doc
+    flags this trade-off in the cross-cutting findings. *)
 Definition distributeAmounts
     (s : Storage) (amount : U256.t) (isRSR : bool)
     : list U256.t * U256.t :=

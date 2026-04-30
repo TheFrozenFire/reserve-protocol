@@ -58,7 +58,7 @@ Lemma phase3_at_95_pct (a : Auction.t) :
   phase3_price a NINETY_FIVE_PERCENT = a.(Auction.worstPrice).
 Proof.
   intros Hv.
-  destruct Hv as [_ Hpo _ _ _ _].
+  destruct Hv as [_ Hpo _ _ _ _ _ _].
   unfold phase3_price.
   unfold NINETY_FIVE_PERCENT, FORTY_FIVE_PERCENT, FIFTY_PERCENT.
   set (best := a.(Auction.bestPrice)).
@@ -77,7 +77,7 @@ Lemma phase3_monotone (a : Auction.t) (p1 p2 : Z) :
   phase3_price a p2 <= phase3_price a p1.
 Proof.
   intros Hv [Hp1 Hp12] _Hp2.
-  destruct Hv as [_ Hpo _ _ _ _].
+  destruct Hv as [_ Hpo _ _ _ _ _ _].
   unfold phase3_price.
   set (delta := a.(Auction.bestPrice) - a.(Auction.worstPrice)).
   assert (Hdelta : 0 <= delta) by (unfold delta; lia).
@@ -283,7 +283,7 @@ Lemma progression_at_startTime (a : Auction.t) :
   progression a a.(Auction.startTime) = 0.
 Proof.
   intros Hv.
-  destruct Hv as [Ht _ _ _ _ _].
+  destruct Hv as [Ht _ _ _ _ _ _ _].
   unfold progression.
   replace (a.(Auction.startTime) - a.(Auction.startTime)) with 0 by lia.
   rewrite Z.mul_0_l.
@@ -296,7 +296,7 @@ Lemma progression_at_endTime (a : Auction.t) :
   progression a a.(Auction.endTime) = FIX_ONE.
 Proof.
   intros Hv.
-  destruct Hv as [Ht _ _ _ _ _].
+  destruct Hv as [Ht _ _ _ _ _ _ _].
   unfold progression.
   set (s := a.(Auction.startTime)). set (e := a.(Auction.endTime)).
   fold s. fold e.

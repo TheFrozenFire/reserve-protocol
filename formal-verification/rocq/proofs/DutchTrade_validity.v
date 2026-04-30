@@ -38,7 +38,7 @@ Lemma phase4_price_nonneg (a : Auction.t) :
   0 <= phase4_price a.
 Proof.
   intros Hv.
-  destruct Hv as [_ _ _ Hwn _ _].
+  destruct Hv as [_ _ _ Hwn _ _ _ _].
   unfold phase4_price.
   exact Hwn.
 Qed.
@@ -51,7 +51,7 @@ Lemma phase4_price_le_bestPrice (a : Auction.t) :
   phase4_price a <= a.(Auction.bestPrice).
 Proof.
   intros Hv.
-  destruct Hv as [_ Hpo _ _ _ _].
+  destruct Hv as [_ Hpo _ _ _ _ _ _].
   unfold phase4_price.
   exact Hpo.
 Qed.
@@ -66,7 +66,7 @@ Lemma phase3_price_le_bestPrice (a : Auction.t) (prog : Z) :
   phase3_price a prog <= a.(Auction.bestPrice).
 Proof.
   intros Hv Hge.
-  destruct Hv as [_ Hpo _ _ _ _].
+  destruct Hv as [_ Hpo _ _ _ _ _ _].
   unfold phase3_price.
   set (delta := a.(Auction.bestPrice) - a.(Auction.worstPrice)).
   assert (Hdelta : 0 <= delta) by (unfold delta; lia).
@@ -92,7 +92,7 @@ Lemma phase3_price_nonneg (a : Auction.t) (prog : Z) :
   0 <= phase3_price a prog.
 Proof.
   intros Hv Hge Hle.
-  destruct Hv as [_ Hpo _ Hwn _ _].
+  destruct Hv as [_ Hpo _ Hwn _ _ _ _].
   unfold phase3_price.
   set (best := a.(Auction.bestPrice)).
   set (worst := a.(Auction.worstPrice)).
@@ -136,7 +136,7 @@ Lemma bidPrice_phase4_nonneg (a : Auction.t) (t : U256.t) :
 Proof.
   intros Hv Hge Hle.
   rewrite (bidPrice_phase4_constant a t Hge Hle).
-  destruct Hv as [_ _ _ Hwn _ _].
+  destruct Hv as [_ _ _ Hwn _ _ _ _].
   exact Hwn.
 Qed.
 
