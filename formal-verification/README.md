@@ -38,10 +38,10 @@ This pattern transfers cleanly to smart contract math because:
 A property typically progresses:
 
 1. **Audit-style witness** (one concrete input, e.g. the Certora FixLib regression cases). Lives in `test/libraries/Fixed.test.ts` as a hand-written `it()` block.
-2. **CAS-derived witness corpus**. Generalize the audit witness to an equivalence class via PARI/GP boundary sweep. Pick the cleanest representative (`safeMulDiv(2^96, 2^96, 1, CEIL) == FIX_MAX` instead of the audit's `2^191+1, 2^192-2, 2^127`). Emit a Foundry `.t.sol` via `cas/_export/foundry_regression_corpus.gp`.
+2. **CAS-derived witness corpus**. Generalize the audit witness to an equivalence class via PARI/GP boundary sweep. Pick the cleanest representative (`safeMulDiv(2^96, 2^96, 1, CEIL) == FIX_MAX` instead of the audit's `2^191+1, 2^192-2, 2^127`). Emit a Hardhat `.test.ts` via `cas/_export/hardhat_regression_corpus.gp` into `test/libraries/CASRegression.test.ts`.
 3. **Rocq simulation lemma**. Hand-write the contract's clean functional model in `rocq/simulations/`; prove the invariant on the simulation. The simulation is typed; mistakes show up at type-check time before any proof effort.
 4. **Yul-translation equivalence**. Run `solc --ir-rocq` to emit the low-level translation, then prove `run_<fn>` lemmas connecting the Yul-derived monadic Rocq to the simulation. The CAS witnesses double as sanity tests for the translation: production Solidity, CAS PARI/GP, and Rocq simulation must all agree on the witness inputs.
-5. **CI gate**. The Foundry regression test runs in CI; the CAS suite runs via `./run-check.sh`; the Rocq proofs compile under `rocq -Q ... .v` and any future change to the contract that breaks the lemma fails the build.
+5. **CI gate**. The Hardhat regression test runs as part of `yarn test`; the CAS suite runs via `./run-check.sh`; the Rocq proofs compile under `rocq -Q ... .v` and any future change to the contract that breaks the lemma fails the build.
 
 ## Property catalog
 
@@ -70,7 +70,7 @@ formal-verification/
 │   ├── README.md                -- per-script index and probe descriptions
 │   ├── WISDOM.md                -- script-authoring gotchas
 │   ├── run-check.sh             -- runs the suite
-│   └── _export/                 -- emits Foundry .t.sol regression cases from CAS witnesses
+│   └── _export/                 -- emits the Hardhat regression corpus into test/libraries/CASRegression.test.ts
 ├── rocq/
 │   ├── README.md                -- proof-tree navigation + per-tier table
 │   ├── WISDOM.md                -- proof-discipline gotchas for contributors

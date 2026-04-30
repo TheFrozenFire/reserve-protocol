@@ -3,7 +3,7 @@
 PARI/GP scripts that cross-check the contract math the Rocq layer
 proves formally. Each script runs in seconds and prints `OK` / `FAIL`
 on per-invariant probes; failures surface as concrete witnesses ready
-to drop into Foundry or Hardhat as regression tests.
+to drop into Hardhat as regression tests via `_export/hardhat_regression_corpus.gp`.
 
 Run the suite:
 
