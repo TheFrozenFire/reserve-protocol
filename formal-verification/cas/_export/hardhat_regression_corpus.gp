@@ -129,10 +129,11 @@ print("    const ratio = bn(10).pow(14) // MAX_RATIO");
 print("    const N = 86400");
 print("    const oneMinusR = FIX_ONE.sub(ratio)");
 print("    const payoutRatio = FIX_ONE.sub(await caller.powu(oneMinusR, N))");
-print("    // CAS-derived expected value: ~99.9823% of FIX_ONE.");
+print("    // CAS-derived expected value: 99.9823189...% of FIX_ONE. Exact match against");
+print("    // the production solc; if a future solc/optimizer change shifts this even by");
+print("    // one wei the test fails and we want to investigate, not paper over.");
 print("    const expected = BigNumber.from('999823189501488433')");
-print("    const tolerance = bn(10).pow(9) // 1e9 wei across solc-version micro-rounding.");
-print("    expect(payoutRatio.sub(expected).abs().lte(tolerance)).to.equal(true)");
+print("    expect(payoutRatio).to.equal(expected)");
 print("  })");
 print("");
 

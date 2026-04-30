@@ -106,10 +106,11 @@ describe('CAS regression corpus', () => {
     const N = 86400
     const oneMinusR = FIX_ONE.sub(ratio)
     const payoutRatio = FIX_ONE.sub(await caller.powu(oneMinusR, N))
-    // CAS-derived expected value: ~99.9823% of FIX_ONE.
+    // CAS-derived expected value: 99.9823189...% of FIX_ONE. Exact match against
+    // the production solc; if a future solc/optimizer change shifts this even by
+    // one wei the test fails and we want to investigate, not paper over.
     const expected = BigNumber.from('999823189501488433')
-    const tolerance = bn(10).pow(9) // 1e9 wei across solc-version micro-rounding.
-    expect(payoutRatio.sub(expected).abs().lte(tolerance)).to.equal(true)
+    expect(payoutRatio).to.equal(expected)
   })
 
   // Source: cas/strsr/exchange_rate_evolution.gp

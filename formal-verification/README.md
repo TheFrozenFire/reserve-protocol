@@ -28,8 +28,8 @@ This pattern transfers cleanly to smart contract math because:
 | Rebalance / RebalancingLib | ✓ | ✓✓ | Basket-range rounding bounds: CAS surfaces the closed form, Rocq proves it. |
 | Distributor share splits | ✓ | ✓ | Share-conservation under arbitrary distributions. |
 | BackingManager state machine | ✓✓ | – | Cross-component lifecycle invariants; Rocq territory. |
-| Reentrancy / access control | ✓✓ | – | Control-flow, not algebraic. CAS doesn't see call stacks. |
-| Cross-contract storage coupling | ✓✓ | – | Same as above. |
+| Reentrancy / access control | – | – | Out of scope. Simulations don't model the call graph or modifiers; production relies on OpenZeppelin `nonReentrant` and `onlyComponent`/`onlyMain` access guards. Closing this gap in the proof tree would require the Yul-equivalence layer (parked workstream 1). |
+| Cross-contract storage coupling | ✓ | – | Joint invariants in `EndToEnd*.v` and `Integration_*.v` cover composition correctness across simulated contracts. Raw storage-slot aliasing (proxy upgrades, shared Main registry slots) is not separately verified. |
 
 (✓ = applies; ✓✓ = primary tool; – = doesn't apply)
 

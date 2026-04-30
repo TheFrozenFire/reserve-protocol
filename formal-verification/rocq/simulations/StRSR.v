@@ -37,6 +37,13 @@
     separate concern (the production code reverts on overflow via
     [FixLib._safeWrap]; the simulation's invariant lemmas state the
     pure-Z properties).
+
+    Coverage scope: this simulation models aggregate stake/unstake math
+    and compound payout. It omits per-account balances, the era /
+    seizure / draft-rate model, the [withdraw] / [cancelUnstake] /
+    [seizeRSR] operations, the ERC20 surface, and the withdrawal-leak
+    mechanism. See [../../notes/simulation_fidelity_audit.md] for the
+    full divergence list and the proof-transferability implications.
 *)
 
 Require Import RocqOfSolidity.RocqOfSolidity.
