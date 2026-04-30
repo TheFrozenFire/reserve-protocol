@@ -73,7 +73,7 @@ Definition entry_FRAX : BasketEntry.t := {|
   BasketEntry.refAmt := refAmt_messy;
 |}.
 
-Definition cal_basket : Storage :=
+Definition cal_basket : Basket :=
   [entry_USDC; entry_DAI; entry_FRAX].
 
 (** ===== W1: single-collateral basket at FIX_ONE refAmt. =====
@@ -197,6 +197,158 @@ Proof. vm_compute. reflexivity. Qed.
     CAS scripts treat this as the "degenerate basket weight" boundary. *)
 Lemma W12_redeem_zero_refAmt :
   redeem_one 0 (10^18) = 0.
+Proof. vm_compute. reflexivity. Qed.
+
+(** =================================================================
+    Lifecycle witnesses (Layer 2).
+
+    Pinning the boundary cases of [setPrimeBasket] / [refreshBasket]
+    that the CAS scripts cas/basket_handler/set_prime_basket.gp and
+    cas/basket_handler/refresh_basket.gp probe.
+
+    Witness map:
+      W13  setPrimeBasket: targetAmt = MIN_TARGET_AMT accepts.
+      W14  setPrimeBasket: targetAmt = MAX_TARGET_AMT accepts.
+      W15  setPrimeBasket: targetAmt = MIN - 1 rejects.
+      W16  setPrimeBasket: targetAmt = MAX + 1 rejects.
+      W17  setPrimeBasket: empty entries rejects.
+      W18  setPrimeBasket: duplicate erc20 rejects.
+      W19  setPrimeBasket: nonce monotonicity (+1).
+      W20  refreshBasket: all-sound -> disabled = false, basket =
+           projection of primes.
+      W21  refreshBasket: missing backup config -> disabled = true.
+    =================================================================
+*)
+
+(** Sample prime entries used for lifecycle witnesses. *)
+Definition pe_USDC : PrimeEntry.t := {|
+  PrimeEntry.erc20      := asset_USDC;
+  PrimeEntry.targetAmt  := refAmt_clean;
+  PrimeEntry.targetName := 1;
+|}.
+
+Definition pe_DAI : PrimeEntry.t := {|
+  PrimeEntry.erc20      := asset_DAI;
+  PrimeEntry.targetAmt  := refAmt_clean;
+  PrimeEntry.targetName := 1;
+|}.
+
+Definition pe_FRAX : PrimeEntry.t := {|
+  PrimeEntry.erc20      := asset_FRAX;
+  PrimeEntry.targetAmt  := refAmt_messy;
+  PrimeEntry.targetName := 1;
+|}.
+
+Definition cal_primes : list PrimeEntry.t := [pe_USDC; pe_DAI; pe_FRAX].
+
+Definition init_storage : Storage.t := {|
+  Storage.basket        := nil;
+  Storage.primeBasket   := nil;
+  Storage.backupConfigs := nil;
+  Storage.nonce         := 0;
+  Storage.disabled      := true;
+|}.
+
+(** ===== W13: targetAmt = MIN_TARGET_AMT accepts. ===== *)
+Definition pe_min : PrimeEntry.t := {|
+  PrimeEntry.erc20      := 7;
+  PrimeEntry.targetAmt  := MIN_TARGET_AMT;
+  PrimeEntry.targetName := 1;
+|}.
+
+Lemma W13_min_targetAmt_accepts :
+  match setPrimeBasket init_storage [pe_min] with
+  | Some _ => True
+  | None => False
+  end.
+Proof. vm_compute. exact I. Qed.
+
+(** ===== W14: targetAmt = MAX_TARGET_AMT accepts. ===== *)
+Definition pe_max : PrimeEntry.t := {|
+  PrimeEntry.erc20      := 7;
+  PrimeEntry.targetAmt  := MAX_TARGET_AMT;
+  PrimeEntry.targetName := 1;
+|}.
+
+Lemma W14_max_targetAmt_accepts :
+  match setPrimeBasket init_storage [pe_max] with
+  | Some _ => True
+  | None => False
+  end.
+Proof. vm_compute. exact I. Qed.
+
+(** ===== W15: targetAmt = MIN - 1 rejects. ===== *)
+Definition pe_below : PrimeEntry.t := {|
+  PrimeEntry.erc20      := 7;
+  PrimeEntry.targetAmt  := MIN_TARGET_AMT - 1;
+  PrimeEntry.targetName := 1;
+|}.
+
+Lemma W15_below_min_rejects :
+  setPrimeBasket init_storage [pe_below] = None.
+Proof. vm_compute. reflexivity. Qed.
+
+(** ===== W16: targetAmt = MAX + 1 rejects. ===== *)
+Definition pe_above : PrimeEntry.t := {|
+  PrimeEntry.erc20      := 7;
+  PrimeEntry.targetAmt  := MAX_TARGET_AMT + 1;
+  PrimeEntry.targetName := 1;
+|}.
+
+Lemma W16_above_max_rejects :
+  setPrimeBasket init_storage [pe_above] = None.
+Proof. vm_compute. reflexivity. Qed.
+
+(** ===== W17: empty entries rejects. ===== *)
+Lemma W17_empty_rejects :
+  setPrimeBasket init_storage nil = None.
+Proof. vm_compute. reflexivity. Qed.
+
+(** ===== W18: duplicate erc20 rejects. ===== *)
+Lemma W18_duplicate_rejects :
+  setPrimeBasket init_storage [pe_USDC; pe_USDC] = None.
+Proof. vm_compute. reflexivity. Qed.
+
+(** ===== W19: nonce monotonicity (+1). ===== *)
+Lemma W19_nonce_increments :
+  match setPrimeBasket init_storage cal_primes with
+  | Some s' => s'.(Storage.nonce) = init_storage.(Storage.nonce) + 1
+  | None => False
+  end.
+Proof. vm_compute. reflexivity. Qed.
+
+(** ===== W20: refreshBasket all-sound -> disabled = false. ===== *)
+
+(** A storage where [primeBasket = cal_primes] and the corresponding
+    AssetStatus list shows every prime as good. Models an all-sound
+    refresh on a non-empty basket. *)
+Definition storage_with_primes : Storage.t := {|
+  Storage.basket        := nil;
+  Storage.primeBasket   := cal_primes;
+  Storage.backupConfigs := nil;
+  Storage.nonce         := 0;
+  Storage.disabled      := true;
+|}.
+
+Definition all_good_statuses : list AssetStatus.t := [
+  {| AssetStatus.erc20 := asset_USDC; AssetStatus.is_good := true |};
+  {| AssetStatus.erc20 := asset_DAI;  AssetStatus.is_good := true |};
+  {| AssetStatus.erc20 := asset_FRAX; AssetStatus.is_good := true |}
+].
+
+Lemma W20_refresh_all_sound_not_disabled :
+  (refreshBasket storage_with_primes all_good_statuses).(Storage.disabled) = false.
+Proof. vm_compute. reflexivity. Qed.
+
+(** ===== W21: refreshBasket missing backup config -> disabled = true. ===== *)
+Definition all_bad_statuses : list AssetStatus.t := [
+  {| AssetStatus.erc20 := asset_USDC; AssetStatus.is_good := false |};
+  {| AssetStatus.erc20 := asset_DAI;  AssetStatus.is_good := false |};
+  {| AssetStatus.erc20 := asset_FRAX; AssetStatus.is_good := false |}
+].
+
+Lemma W21_refresh_no_backup_disabled :
+  (refreshBasket storage_with_primes all_bad_statuses).(Storage.disabled) = true.
 Proof. vm_compute. reflexivity. Qed.
 
 End BasketHandlerWitnesses.

@@ -66,7 +66,7 @@ Definition entry_FRAX : BasketEntry.t := {|
   BasketEntry.refAmt := cal_refAmt_messy;
 |}.
 
-Definition cal_basket : Storage :=
+Definition cal_basket : Basket :=
   [entry_USDC; entry_DAI; entry_FRAX].
 
 (** ----- Probe 1: clean quote at 1 BU, FLOOR. -----
@@ -157,5 +157,99 @@ Lemma xcheck_floor_le_ceil_witness :
   quote_one cal_refAmt_messy 1 RoundingMode.FLOOR
   <= quote_one cal_refAmt_messy 1 RoundingMode.CEIL.
 Proof. vm_compute. discriminate. Qed.
+
+(** =================================================================
+    Lifecycle xchecks (Layer 2).
+
+    Cross-checks for [setPrimeBasket] / [refreshBasket] mirroring
+    cas/basket_handler/set_prime_basket.gp and refresh_basket.gp.
+    =================================================================
+*)
+
+(** Calibration prime entry. *)
+Definition cal_pe_USDC : PrimeEntry.t := {|
+  PrimeEntry.erc20      := asset_USDC;
+  PrimeEntry.targetAmt  := cal_refAmt_clean;
+  PrimeEntry.targetName := 1;
+|}.
+
+Definition cal_init_storage : Storage.t := {|
+  Storage.basket        := nil;
+  Storage.primeBasket   := nil;
+  Storage.backupConfigs := nil;
+  Storage.nonce         := 0;
+  Storage.disabled      := true;
+|}.
+
+(** ----- Probe 11: setPrimeBasket on minimum-target accepts. -----
+    Mirrors set_prime_basket.gp INV-SP1 boundary acceptance. *)
+Lemma xcheck_setPrimeBasket_min_target_accepts :
+  setPrimeBasket cal_init_storage
+    [{| PrimeEntry.erc20      := 7;
+        PrimeEntry.targetAmt  := MIN_TARGET_AMT;
+        PrimeEntry.targetName := 1 |}]
+  <> None.
+Proof. vm_compute. discriminate. Qed.
+
+(** ----- Probe 12: setPrimeBasket below-min rejects. -----
+    Mirrors set_prime_basket.gp INV-SP2 below-min rejection. *)
+Lemma xcheck_setPrimeBasket_below_min_rejects :
+  setPrimeBasket cal_init_storage
+    [{| PrimeEntry.erc20      := 7;
+        PrimeEntry.targetAmt  := MIN_TARGET_AMT - 1;
+        PrimeEntry.targetName := 1 |}]
+  = None.
+Proof. vm_compute. reflexivity. Qed.
+
+(** ----- Probe 13: setPrimeBasket duplicate erc20 rejects. -----
+    Mirrors set_prime_basket.gp INV-SP3. *)
+Lemma xcheck_setPrimeBasket_duplicate_rejects :
+  setPrimeBasket cal_init_storage [cal_pe_USDC; cal_pe_USDC] = None.
+Proof. vm_compute. reflexivity. Qed.
+
+(** ----- Probe 14: setPrimeBasket success increments nonce by 1. -----
+    Mirrors set_prime_basket.gp INV-SP7. *)
+Lemma xcheck_setPrimeBasket_nonce_increment :
+  match setPrimeBasket cal_init_storage [cal_pe_USDC] with
+  | Some s' => s'.(Storage.nonce) = 1
+  | None => False
+  end.
+Proof. vm_compute. reflexivity. Qed.
+
+(** ----- Probe 15: refreshBasket all-sound preserves disabled = false. -----
+    Mirrors refresh_basket.gp INV-RB1. *)
+Definition cal_storage_with_USDC : Storage.t := {|
+  Storage.basket        := nil;
+  Storage.primeBasket   := [cal_pe_USDC];
+  Storage.backupConfigs := nil;
+  Storage.nonce         := 0;
+  Storage.disabled      := true;
+|}.
+
+Definition cal_USDC_good : list AssetStatus.t :=
+  [{| AssetStatus.erc20 := asset_USDC; AssetStatus.is_good := true |}].
+
+Lemma xcheck_refreshBasket_all_sound_enables :
+  (refreshBasket cal_storage_with_USDC cal_USDC_good).(Storage.disabled) = false.
+Proof. vm_compute. reflexivity. Qed.
+
+(** ----- Probe 16: refreshBasket no backup -> disabled = true. -----
+    Mirrors refresh_basket.gp INV-RB3. *)
+Definition cal_USDC_bad : list AssetStatus.t :=
+  [{| AssetStatus.erc20 := asset_USDC; AssetStatus.is_good := false |}].
+
+Lemma xcheck_refreshBasket_no_backup_disabled :
+  (refreshBasket cal_storage_with_USDC cal_USDC_bad).(Storage.disabled) = true.
+Proof. vm_compute. reflexivity. Qed.
+
+(** ----- Probe 17: refreshBasket success increments nonce by 1. ----- *)
+Lemma xcheck_refreshBasket_nonce_increment :
+  (refreshBasket cal_storage_with_USDC cal_USDC_good).(Storage.nonce) = 1.
+Proof. vm_compute. reflexivity. Qed.
+
+(** ----- Probe 18: refreshBasket failure path keeps nonce. ----- *)
+Lemma xcheck_refreshBasket_failure_keeps_nonce :
+  (refreshBasket cal_storage_with_USDC cal_USDC_bad).(Storage.nonce) = 0.
+Proof. vm_compute. reflexivity. Qed.
 
 End BasketHandlerXCheck.

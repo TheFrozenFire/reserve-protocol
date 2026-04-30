@@ -34,6 +34,8 @@ scripts=(
   deprecation/rtoken_deprecation.gp
   basket_handler/quote_rounding_direction.gp
   basket_handler/quote_round_trip.gp
+  basket_handler/set_prime_basket.gp
+  basket_handler/refresh_basket.gp
 )
 
 failed=0
