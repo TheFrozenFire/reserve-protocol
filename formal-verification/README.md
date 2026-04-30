@@ -79,7 +79,7 @@ the most decision-relevant theorems in 7 sections.
 
 ```
 formal-verification/
-├── methodology.md               -- this file
+├── README.md                    -- this file (methodology + layout + build)
 ├── contracts/                   -- Solidity harnesses for solc --ir-rocq
 │   ├── _relaxed/                -- pragma-relaxed copies (^0.8.28) of FixLib + ThrottleLib
 │   ├── ThrottleHarness.sol
