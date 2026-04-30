@@ -513,20 +513,57 @@ caller to discharge the auth, oracle, and registry boundaries.
 7. The `tradeEnd[kind]` per-kind DoS guard (line 117) and `tokensOut[erc20]` accounting (line 86, 168) are unmodeled — both are 3.0.0 / 3.1.0 additions specifically to prevent same-block trade chains. Sim cannot witness their absence.
 8. `setBackingBuffer` and `setTradingDelay` (governance setters) are unmodeled. Live-vs-frozen for `backingBuffer` is recorded under cross-cutting finding 2.
 
-## Rebalance / RecollateralizationLib
+## Rebalance / RecollateralizationLib (gold-standard audit)
 
-**Algebraic skeleton.** Models the noise-bound primitives
-(`dustNoiseBU`, `noise_loose`, `noise_tight`) and an abstract
-`basketRange` over `RangeInputs`.
+The simulation captures **the algebraic skeleton of `basketRange`**:
+its final clipping step (`high = min(rawHigh, supply)`,
+`low = min(rawLow, high)`) and the noise-bound primitives
+(`dustNoiseBU`, `noise_loose`, `noise_tight`) used by Echidna's fuzzing
+property. It omits **the per-asset oracle loop that derives
+`deltaTop` and `uoaBottom` from the registry, the `BUs unpriced`
+revert, the FIX_MAX-overflow reverts on `_safeWrap`, the asset-skip
+predicate (lines 147–152), and the entire `nextTradePair` /
+`isBetterSurplus` selection logic**. The proofs against this model
+are correct for the abstract relation between aggregate slack and
+the clipped output; they say nothing about the per-asset accumulation
+that produces those slack figures in production. This is the most
+heavily-scoped simulation in the tree relative to its production
+counterpart.
 
-The header explicitly scopes out the per-asset oracle loop, asset
-registry indirection, and FIX_MAX-overflow reverts. Acceptable framing
-but means lemmas about the noise envelope are statements about the
-abstract function `basketRange`, not the production implementation.
+### State omitted
 
-**Gaps**: production `basketRange` is far more complex; the sim is
-faithful only to the algebraic relation between aggregate inputs and
-the (low, high) output, not to the oracle-driven derivation.
+| Production state | Purpose | Simulation analog |
+|---|---|---|
+| (none — RecollateralizationLib is a stateless library) | n/a | n/a |
+| Caller-side `TradingContext` | Bundles basketsHeld, bh, ar, stRSR, rsr, rToken, minTradeVolume, maxTradeSlippage, quantities[], bals[] | **`RangeInputs.t`** carries supplyTotal, basketsHeldBottom, basketsHeldTop, lowSlack, highSlack — the aggregate result of folding TradingContext through the per-asset loop. |
+| Caller-side `Registry` | erc20s[], assets[] arrays from `assetRegistry.getRegistry()` | None — modeled as folded-into-slack. |
+
+### Operations omitted
+
+| Production function | Effect | Modeled? |
+|---|---|---|
+| `prepareRecollateralizationTrade(TradingContext, Registry) -> (doTrade, TradeRequest, TradePrices)` (line 33) | Calls `basketRange`, `nextTradePair`, then `prepareTradeSell` or `prepareTradeToCoverDeficit` based on whether sellLow=0 or sell is unsound | **No.** Modeled at the BackingManager-sim level (`prepareRecollateralizationTrade` there abstracts the asset-pick and calls `TradeLib.buyAmount` directly). |
+| `basketRange(TradingContext, Registry) -> BasketRange` (line 108) | Per-asset accumulation of `deltaTop` and `uoaBottom` from oracle prices, slippage, dust loss, then final clipping | **Partial.** Sim's `basketRange : RangeInputs -> BasketRange` covers only the final clipping at production lines 223–226 (`if range.top > basketsNeeded then ...`, `if range.bottom > range.top then ...`). The full per-asset loop (lines 139–200) and the `(buPriceLow, buPriceHigh) = ctx.bh.price(false)` call (line 116) are **unmodeled**. |
+| `nextTradePair(TradingContext, Registry, BasketRange) -> TradeInfo` (line 274) | Picks the (sell, buy) pair with max surplus / max deficit; tracks SOUND vs IFFY/DISABLED priority for the sell side | **No.** This is the asset-pick logic; sim's `prepareRecollateralizationTrade` (in BackingManager.v) takes the chosen pair as input. |
+| `isBetterSurplus(MaxSurplusDeficit, CollateralStatus, uint192)` (line 381) | Tiebreaker when comparing surplus candidates: SOUND > IFFY > DISABLED | **No.** |
+
+### What the simulation *does* faithfully model
+
+- The final clipping at production lines 223–226: `range.top := min(rawHigh, basketsNeeded)`, `range.bottom := min(rawLow, range.top)` — sim's `basketRange` mirrors this directly.
+- The noise envelope used by FuzzP1's `isBasketRangeSmaller`: `noise_loose(bl, mtv, bup) = bl * dustNoiseBU + bl^2 + 2`.
+- The tight alternative bound `noise_tight = bl * dustNoiseBU + 4*bl + 4` (strictly smaller for `bl >= 5`).
+- The `dustNoiseBU(mtv, buPriceHigh) = ceil(mtv * FIX_ONE / buPriceHigh)` formula.
+- `Valid.inputs` carries the structural invariants the production code maintains pre-clipping: `basketsHeldBottom <= basketsHeldTop`, `basketsHeldTop <= supplyTotal`, non-negative slacks, `supplyTotal <= FIX_MAX`.
+
+### Implications for proof transferability
+
+1. Lemmas about `basketRange` are statements about the abstract function `basketRange : RangeInputs -> BasketRange`, *not* about production's per-asset loop. They say "given any (basketsHeldBottom, basketsHeldTop, lowSlack, highSlack, supplyTotal) satisfying `Valid.inputs`, the clipped output respects the algebraic envelope". They do *not* say "production produces `(lowSlack, highSlack)` matching the noise model on real oracle inputs" — that claim is what the CAS scripts in `cas/rebalance/` work toward, but the rocq simulation does not bridge.
+2. The `BUs unpriced` revert at production line 117 is unmodeled. Lemmas hold for ranges that production would reject as unpriced.
+3. The FIX_MAX-overflow reverts on `_safeWrap` (production lines 206, 210, 220) are unmodeled. The simulation uses `Z` arithmetic and assumes inputs are bounded.
+4. The asset-skip predicate at production lines 147–152 (skip dust-balance assets not in basket, when `quantities[i] == 0` and `!isEnoughToSell`) is folded into the abstract slack: a reviewer cannot tell from the sim whether a particular asset contributed to `lowSlack`.
+5. The most surprising divergence: production's `basketRange` skips RToken itself (`if (reg.erc20s[i] == IERC20(address(ctx.rToken))) continue;` at line 141). The sim has no notion of asset identity, so this skip is implicit in the slack values rather than visible in the model.
+6. The "deficit + slippage" path at production lines 218–220 (`uoaBottom.mulDiv(FIX_ONE - maxTradeSlippage, buPriceHigh, FLOOR)`) is implicit in `lowSlack`. The simulation cannot witness the maxTradeSlippage parameter at all — proofs cannot reason about live-vs-frozen of that governance value.
+7. The header is honest about the scope: this is an algebraic skeleton, not a production-faithful model. Coverage claims should read "noise envelope and final clipping", not "rebalance basketRange".
 
 ## TradeLib
 
