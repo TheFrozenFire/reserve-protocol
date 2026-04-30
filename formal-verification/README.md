@@ -4,8 +4,8 @@
 
 A formal verification effort has two distinct failure modes:
 
-1. **Logical unsoundness** — the proof has a hole, the lemma chain doesn't actually establish what it claims. Caught by an interactive theorem prover (Rocq, Lean).
-2. **Modeling error** — the proof is impeccable, but the abstract model the proof reasons about doesn't faithfully capture what the production code does. Caught by running both models on calibrated inputs and checking they agree.
+1. **Logical unsoundness**: the proof has a hole, the lemma chain doesn't actually establish what it claims. Caught by an interactive theorem prover (Rocq, Lean).
+2. **Modeling error**: the proof is impeccable, but the abstract model the proof reasons about doesn't faithfully capture what the production code does. Caught by running both models on calibrated inputs and checking they agree.
 
 These are **orthogonal**. A protocol can have a beautiful Rocq proof of a vacuous claim, or a perfect numerical match against a buggy specification. The dual-track pattern bracket the same property from two sides:
 
@@ -16,7 +16,7 @@ This pattern transfers cleanly to smart contract math because:
 
 - Smart contract math is integer / fixed-point arithmetic, which PARI/GP handles natively as exact rationals.
 - Calibration data (RToken supplies, basket parameters, fee ratios) is already in-tree (`deployments.json`, governance configs).
-- The historically dominant bug class for SC math libraries is *boundary anomalies in fixed-point arithmetic* — the exact class CAS is best at finding.
+- The historically dominant bug class for SC math libraries is *boundary anomalies in fixed-point arithmetic*. That's the exact class CAS is best at finding.
 
 ## Where each layer applies
 
@@ -27,7 +27,7 @@ This pattern transfers cleanly to smart contract math because:
 | Furnace, StRSR | ✓ | ✓ | Compound-payout identity `1 - (1-r)^N`; CAS validates against geometric simulation. |
 | Rebalance / RebalancingLib | ✓ | ✓✓ | Basket-range rounding bounds: CAS surfaces the closed form, Rocq proves it. |
 | Distributor share splits | ✓ | ✓ | Share-conservation under arbitrary distributions. |
-| BackingManager state machine | ✓✓ | – | Cross-component lifecycle invariants — Rocq territory. |
+| BackingManager state machine | ✓✓ | – | Cross-component lifecycle invariants; Rocq territory. |
 | Reentrancy / access control | ✓✓ | – | Control-flow, not algebraic. CAS doesn't see call stacks. |
 | Cross-contract storage coupling | ✓✓ | – | Same as above. |
 
@@ -48,15 +48,15 @@ A property typically progresses:
 The Rocq tree organizes proofs into seven per-domain tiers (simulation,
 invariants, cross-checks, validity preservation, composition,
 witnesses, uint256 bounds) plus cross-domain integration files and two
-system-level joint-invariant theorems. **Coverage is dense — every
-domain has all seven tiers populated.** Two formalized bug findings
+system-level joint-invariant theorems. Coverage is dense: every
+domain has all seven tiers populated. Two formalized bug findings
 (PR #1285 deprecation sequencing; governance-conditional auction-fee
 `reportViolation` gap) are pinned as machine-checked counterexample
 theorems.
 
 For the per-tier file-pattern table, navigation guidance, and proof
 discipline notes, see [`rocq/README.md`](rocq/README.md). For a
-navigation start, read [`rocq/Audit.v`](rocq/Audit.v) from the top —
+navigation start, read [`rocq/Audit.v`](rocq/Audit.v) from the top:
 it surfaces the most decision-relevant theorems in 7 sections.
 
 ## Layout
@@ -134,7 +134,7 @@ machine.
 #### macOS (Homebrew)
 
 If you have a Homebrew-installed `gnu-binutils` or `coreutils` ahead
-of `/usr/bin` on PATH, also `brew install m4` — some opam packages
+of `/usr/bin` on PATH, also `brew install m4`. Some opam packages
 build native code and need GNU `m4`. macOS's bundled `/usr/bin/m4`
 suffices when no Homebrew GNU toolchain shadows it.
 
@@ -205,7 +205,7 @@ layout differs from the defaults:
 Docker is used only for the `solc-rocq` auto-translation runs (the
 path that emits the Yul-derived Rocq from `contracts/<Harness>.sol`).
 The amd64 ELF `solc-rocq` binary is invoked via Docker on non-Linux
-hosts. Proof compilation and the CAS suite both run natively — no
+hosts. Proof compilation and the CAS suite both run natively. No
 Docker required.
 
 ## Parked workstreams

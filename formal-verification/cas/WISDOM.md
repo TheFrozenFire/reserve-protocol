@@ -2,7 +2,7 @@
 
 Lessons captured while authoring the CAS suite under
 `formal-verification/cas/`. Each entry documents a PARI/GP gotcha that
-cost real time during this work — captured so the next author hits them
+cost real time during this work, captured so the next author hits them
 once at most.
 
 ## PARI/GP parser quirks
@@ -16,7 +16,7 @@ These all bit during script authoring; the workarounds are stable.
   treats line breaks inside argument lists as terminators. Put the
   whole `printf` on one line, or wrap the call in `{ ... }` to
   suppress newline-as-terminator handling.
-- **Nested `{ }` blocks are rejected** — "embedded braces (in parser)
+- **Nested `{ }` blocks are rejected**: "embedded braces (in parser)
   is not yet implemented". Hit this when trying to put a
   multi-statement `{ printf(...); }` inside a `for(...)` body that
   was itself inside an outer `{ }` block. Workaround: lift the inner
@@ -40,7 +40,7 @@ When a contract uses different constants (e.g. StRSR's
 `MAX_STAKE_RATE = 1e9 * FIX_ONE`), declare them at the top with a
 source-line comment cross-reference.
 
-### R002: Don't model the bug — model the spec
+### R002: Don't model the bug, model the spec
 
 When replaying audit findings, modelling the *pre-mitigation buggy
 behaviour* is fragile (the bug typically depends on Solidity inline
@@ -51,7 +51,7 @@ from a non-saturating one. The witness corpus is the deliverable;
 the bug reproduction belongs in Foundry.
 
 This is why `safe_muldiv_certora_witness.gp` deliberately stops
-modelling pre-mitigation semantics after one attempt — it would
+modelling pre-mitigation semantics after one attempt; it would
 have meant porting `_safeMulDiv`'s 512-bit assembly into PARI/GP for
 no useful gain.
 
@@ -98,7 +98,7 @@ the script reports are misleading.
 ### R006: PARI/GP's `Strprintf` returns a string but doesn't fix W019
 
 When trying to format a value inline within a `printf` argument list
-that's inside a `for` loop, `Strprintf` doesn't help — the outer
+that's inside a `for` loop, `Strprintf` doesn't help: the outer
 `printf` still needs braces, and the brace problem is structural.
 Use a top-level helper function to keep the inner code single-line.
 

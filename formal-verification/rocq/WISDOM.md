@@ -2,7 +2,7 @@
 
 Lessons captured while authoring the proof tree under
 `formal-verification/rocq/`. Each entry documents a Rocq/Coq 8.20.1
-gotcha that cost real time during this work — captured so the next
+gotcha that cost real time during this work, captured so the next
 contributor hits each at most once. Mirrors the `cas/WISDOM.md`
 convention.
 
@@ -21,14 +21,14 @@ Opaque FixLib.powu FixLib.mulu_toUint FixLib.minus FixLib.divrnd.
 ```
 
 This is the single most common cause of "the proof was working a
-moment ago, why does it OOM now" — adding a new lemma that touches
+moment ago, why does it OOM now": adding a new lemma that touches
 `powu` without first marking it opaque blows up downstream proofs.
 
 ## R002: Use `injection ... as ... ; subst <name>` over `inversion ... subst`
 
 `inversion H; subst` does maximal substitution: every variable mentioned
 in `H` gets substituted away, which forces Coq to evaluate the
-right-hand sides — including any large arithmetic expressions
+right-hand sides, including any large arithmetic expressions
 (`powu`, `mulu_toUint`, `divrnd`).
 
 **Workaround:** prefer `injection H as <eq1> <eq2>; subst <name>`. This
@@ -41,7 +41,7 @@ subst s'.
 (* Hamt_eq : amount = <giant arithmetic expression> remains symbolic *)
 ```
 
-Forward `rewrite Hamt_eq` (not `<-`) — Coq 8.20's `injection` produces
+Forward `rewrite Hamt_eq` (not `<-`); Coq 8.20's `injection` produces
 equations in the `<expr> = name` direction.
 
 ## R003: Do NOT install `Z.to_euclidean_division_equations` zify hook
@@ -88,7 +88,7 @@ Coq's `Theorem` with `:=` requires an explicit type annotation:
 Theorem audit_foo : forall x, P x.
 Proof. ... Qed.
 
-(* Re-export — does NOT compile: *)
+(* Re-export: does NOT compile *)
 Theorem audit_foo := MyModule.original_foo.   (* error: missing type *)
 ```
 
@@ -150,7 +150,7 @@ x => P x y)`.
 When proving `<op>_preserves_input_bounded` for an operation that does
 arithmetic on the new state field (e.g. `s'.lastAvailable = available
 - amount`), the bound on `s'.lastAvailable` cannot in general be
-derived from the bound on `s.lastAvailable` alone — production relies
+derived from the bound on `s.lastAvailable` alone; production relies
 on the EVM's `_safeWrap` revert path to enforce the next-state bound.
 
 **Convention:** model `_safeWrap` as a hypothesis on the post-state:
@@ -183,7 +183,7 @@ auto-generated Yul-derived Rocq. They are:
 
 - regenerable via the documented Docker pipeline (see
   `../contracts/README.md`)
-- not referenced by any active proof — Yul-equivalence is parked
+- not referenced by any active proof; Yul-equivalence is parked
 - 10K+ lines of generated content if all included
 
 `.gitignore` does not exclude them by extension (we want to track our

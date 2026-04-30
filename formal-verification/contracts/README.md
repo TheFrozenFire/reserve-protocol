@@ -1,7 +1,7 @@
 # Solidity harnesses for solc-rocq translation
 
 Solidity input fixtures for the auto-translation pipeline. Not deployed
-contracts — these files exist solely as inputs to `solc --ir-rocq`, which
+contracts. These files exist solely as inputs to `solc --ir-rocq`, which
 emits Yul-derived Rocq from each top-level contract. See
 `../README.md` for the dual-track Rocq + CAS methodology these
 harnesses feed into.
@@ -37,12 +37,12 @@ The production `Fixed.sol` and `Throttle.sol` declare `pragma solidity
 `0.8.29-develop` and refuses files pinned to a different exact version.
 Rather than fight the version check, `_relaxed/` holds copies pragma'd to
 `^0.8.28` so the harnesses can `import "./_relaxed/Fixed.sol"`. The
-content is identical to the production source — only the pragma differs.
+content is identical to the production source. Only the pragma differs.
 
 ## Why these files don't follow project lint style
 
 Listed in `../../.solhintignore`. The shape constraints from `solc-rocq`
-override the project's prettier/solhint rules — single-line function
+override the project's prettier/solhint rules. Single-line function
 signatures often exceed 100 chars, and the `_relaxed/Fixed.sol` copy
 inherits the visibility-marker omissions that the production file
 already gets exempted for.
@@ -56,7 +56,7 @@ bash scripts/solc-rocq contracts/ThrottleHarness.sol --ir-rocq
 ```
 
 Output lands in `../rocq/<HarnessName>.v` as auto-generated Yul-derived
-Rocq. These files are **not committed** — they are regenerable, not
+Rocq. These files are **not committed**: they are regenerable, not
 referenced by the active proof tree, and would add ~10K lines of
 auto-generated content for an unused workstream. The Yul-equivalence
 work that would consume them is parked (see `../README.md`).
@@ -65,7 +65,7 @@ work that would consume them is parked (see `../README.md`).
 
 1. Write the harness as a single contract with constructor + a small
    surface of `external` entry points. Do not inherit; flatten.
-2. Keep all function signatures on a single line — the optimizer
+2. Keep all function signatures on a single line; the optimizer
    crashes on multi-line signatures in non-trivial cases.
 3. Test the build: `bash scripts/solc-rocq contracts/<NewHarness>.sol --ir-rocq`.
 4. If solc-rocq crashes, see [`../notes/probes/`](../notes/probes/) for
