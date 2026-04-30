@@ -21,9 +21,11 @@ jobs:
         with:
           repository: formal-land/rocq-of-solidity
           path: _tools/rocq-of-solidity
-          # Pin a known-good rev — bump deliberately when the upstream
-          # substrate changes. Leaving as `main` makes the workflow
-          # break under our feet on upstream API drift.
+          # We do not pin a SHA: no specific upstream rev has been
+          # validated as known-good against the current proof tree.
+          # Failures from upstream drift will surface as workflow
+          # failures and should prompt either a SHA pin here or an
+          # update to the proof tree to match new upstream APIs.
           ref: main
 
       - name: Set up OCaml
@@ -35,12 +37,14 @@ jobs:
             coq-released: https://coq.inria.fr/opam/released
 
       - name: Install Coq + proof dependencies
+        # All package versions pinned to the exact set this proof
+        # tree was authored against. Bump deliberately, not by drift.
         run: |
           opam install -y \
             coq.8.20.1 \
             coq-hammer-tactics.1.3.2+8.20 \
-            coq-coqutil \
-            coq-record-update
+            coq-coqutil.0.0.6 \
+            coq-record-update.0.3.6
 
       - name: Compile rocq-of-solidity library
         run: |

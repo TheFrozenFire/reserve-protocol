@@ -72,13 +72,18 @@ EOF
 fi
 
 # Verify Coq version: the proof tree depends on Coq 8.20.x specifically.
+# The .vo files in rocq-of-solidity were compiled with 8.20.1 and have a
+# binary version tag that any other Coq major.minor will reject. Failing
+# fast here gives a clearer error than the kernel's "bad version number".
 COQ_VERSION="$(coqc --version | head -1 | sed -E 's/.*version ([0-9]+\.[0-9]+).*/\1/')"
 if [[ "$COQ_VERSION" != "8.20" ]]; then
   cat >&2 <<EOF
-warning: this proof tree targets Coq 8.20.x; found $COQ_VERSION.
-Continuing — most tactics work across 8.19/8.21 — but if you hit
-unexplained tactic failures, check Coq version compatibility.
+error: this proof tree requires Coq 8.20.x; found $COQ_VERSION.
+The pre-built rocq-of-solidity .vo artifacts will reject any other
+Coq version. Set OPAM_SWITCH to a switch with Coq 8.20.1 installed,
+or see ../README.md for install instructions.
 EOF
+  exit 6
 fi
 
 if [[ $# -eq 0 ]]; then

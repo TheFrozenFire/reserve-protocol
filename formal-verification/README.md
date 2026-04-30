@@ -133,6 +133,11 @@ machine.
 
 #### macOS (Homebrew)
 
+If you have a Homebrew-installed `gnu-binutils` or `coreutils` ahead
+of `/usr/bin` on PATH, also `brew install m4` — some opam packages
+build native code and need GNU `m4`. macOS's bundled `/usr/bin/m4`
+suffices when no Homebrew GNU toolchain shadows it.
+
 ```sh
 brew install opam pari
 opam init -y --bare

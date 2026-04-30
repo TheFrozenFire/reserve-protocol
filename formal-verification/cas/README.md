@@ -38,6 +38,7 @@ numerical drift between the layers fails the build.
 | `safe_muldiv_certora_witness.gp` | Replays Certora finding #1 (`safeMulDiv` → 0 instead of FIX_MAX). Generates a 4,753-element boundary corpus; minimum-overflow witness is `safeMulDiv(2^96, 2^96, 1, CEIL) = FIX_MAX`. |
 | `safe_div_propagation.gp` | Replays Certora finding #2 (FIX_MAX must propagate through `safeDiv`). Sweep shows the bug-affected region is the entire `b ≥ FIX_ONE` range; magnitude scales with `1/b`. |
 | `mul_rounding_direction.gp` | Default-rounding change `mul(x,y) := mul(x,y,FLOOR)`. Density measurement: 49.3% of random uint192 pairs disagree under ROUND vs FLOOR; gap is always exactly 1 wei. |
+| `powu_correctness.gp` | Validates `FixLib.powu` (fixed-point exponentiation by squaring) at canonical inputs and boundary cases (`x = 0`, `x = FIX_ONE`, `y = 0`, `y = 1`); cross-checks against analytic `1 - (1-r)^N` over N up to 10000. |
 
 ### `throttle/` — ThrottleLib invariants
 

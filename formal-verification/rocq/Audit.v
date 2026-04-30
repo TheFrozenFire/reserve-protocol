@@ -161,7 +161,11 @@ Notation audit_share_conservation :=
 
 (** Cross-domain composition: the BackingManager surplus split
     feeds the Distributor on both legs and conservation holds for
-    each. Closes the BackingManager -> Distributor circuit. *)
+    each. Closes the BackingManager -> Distributor circuit.
+
+    Companion file [Integration_revenue_path.v] proves the weaker
+    non-negativity composition along the same path; this file pins
+    the stronger [sum + dust = amount] equality across both legs. *)
 Notation audit_revenue_full_circuit :=
   IntegrationRevenueFullCircuit.revenue_full_circuit_conservation.
 

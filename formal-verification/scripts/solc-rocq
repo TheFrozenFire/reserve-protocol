@@ -31,11 +31,11 @@ if [[ ! -x "$ROCQ_TREE/build/solc/solc" ]]; then
 error: rocq-of-solidity solc binary not found at:
   $ROCQ_TREE/build/solc/solc
 
-Set ROCQ_TREE to point at a built rocq-of-solidity checkout, or
-build the upstream:
+Set ROCQ_TREE to point at a built rocq-of-solidity checkout, or build
+the upstream. The project is a fork of the Solidity compiler; follow
+its build instructions:
 
-  git clone https://github.com/formal-land/rocq-of-solidity "\$ROCQ_TREE"
-  cd "\$ROCQ_TREE" && cmake -B build && cmake --build build --target solc
+  https://github.com/formal-land/rocq-of-solidity#-quick-start
 
 The amd64 ELF binary is invoked via Docker on non-Linux hosts.
 EOF
