@@ -33,6 +33,10 @@ Require Import Reserve.proofs.Integration_revenue_full_circuit.
 Require Import Reserve.proofs.Collateral.
 Require Import Reserve.proofs.Collateral_validity.
 
+(* Section 6b - BasketHandler lifecycle. *)
+Require Import Reserve.proofs.BasketHandler_validity.
+Require Import Reserve.proofs.BasketHandler_chain.
+
 (* Section 7 - System-level. *)
 Require Import Reserve.proofs.EndToEnd_strengthened.
 Require Import Reserve.proofs.EndToEnd_complete.
@@ -177,6 +181,49 @@ Notation audit_disabled_is_terminal :=
     timestamps, uint192 prices) across every refresh. *)
 Notation audit_refresh_preserves_validity :=
   CollateralValidity.refresh_preserves_validity.
+
+(** ============================================================
+    Section 6b - BasketHandler lifecycle.
+
+    The BasketHandler simulation now models the basket-state
+    lifecycle in addition to the quote math kernel. Two governance-
+    triggered operations: [setPrimeBasket] writes the prime basket
+    after validating target-amount bounds, basket size, and erc20
+    uniqueness; [refreshBasket] consumes a per-erc20 AssetStatus list
+    to swap in backup collateral when prime collateral disables.
+    ============================================================ *)
+
+(** [setPrimeBasket] preserves the storage [Valid.t] invariant.
+    Successful governance writes leave the storage well-typed:
+    target amounts in [MIN_TARGET_AMT, MAX_TARGET_AMT], no duplicate
+    erc20s, basket length bounded, nonce within uint256 range, and
+    the live basket's refAmt non-negativity preserved. *)
+Notation audit_setPrimeBasket_validates :=
+  BasketHandlerValidityProofs.setPrimeBasket_preserves_validity.
+
+(** [refreshBasket] preserves storage [Valid.t]. The total operation
+    either rebuilds the basket from good primes plus backup collateral
+    (success) or leaves the basket as-is and flips [disabled = true]
+    (failure); both paths preserve the invariants. *)
+Notation audit_refreshBasket_preserves_validity :=
+  BasketHandlerValidityProofs.refreshBasket_preserves_validity.
+
+(** [refreshBasket] target-amount conservation in the all-sound case.
+    When every prime erc20 is good, the post-refresh basket's sum of
+    refAmts equals the prime config's sum of targetAmts — exact
+    conservation, no rounding loss. The general (mixed-status) case
+    is bounded by the floor-distribution rounding budget [size - 1]
+    wei per target name. *)
+Notation audit_refreshBasket_targetAmt_conservation :=
+  BasketHandlerChain.refreshBasket_targetAmt_conservation_all_sound.
+
+(** [refreshBasket] disabled-iff-no-backup contrapositive. If the
+    post-refresh state has [disabled = true], either some target had
+    positive unsound weight with no available backup, or the new
+    basket would have been empty — pinning the production-faithful
+    "disabled = true ↔ next-basket selection failed" semantics. *)
+Notation audit_refreshBasket_disabled_implies_no_backup :=
+  BasketHandlerChain.refreshBasket_disabled_implies_no_backup_available.
 
 (** ============================================================
     Section 7 - System-level.

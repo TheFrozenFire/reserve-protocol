@@ -280,17 +280,59 @@ production for `safeMulDiv`.
 
 ## BasketHandler
 
-**Quote math only.** Models `quote_one`, `quote`, `quoteQuantities`,
-`redeem_one`. Storage = list of `(asset, refAmt)`.
+**Quote math + basket-state lifecycle.** Two layers:
+- **Layer 1 — Quote math kernel.** `quote_one`, `quote`,
+  `quoteQuantities`, `redeem_one` over the live `Basket` (list of
+  `(asset, refAmt)`).
+- **Layer 2 — Basket-state lifecycle.** `setPrimeBasket`,
+  `refreshBasket` operate on a `Storage` record `{basket, primeBasket,
+  backupConfigs, nonce, disabled}`, mirroring production
+  `BasketHandlerP1`'s state. The previous `Definition Storage : Set
+  := list BasketEntry.t` is renamed to `Definition Basket` so existing
+  proofs about quote semantics carry over without churn.
 
-**Gaps**: the entire basket-management lifecycle (`setPrimeBasket`,
-`refreshBasket`, governance toggles, `nonce` for basket changes), the
-issuance-premium application (which is modeled separately in
-`IssuancePremium.v`), oracle integration, the `revenueHiding` decay,
-multi-collateral `quote` complications.
+**Lifecycle modeled**:
+- `setPrimeBasket` validates `MIN_TARGET_AMT <= targetAmt[i] <=
+  MAX_TARGET_AMT` (1e12 / 1e21 from production lines 31–32),
+  rejects empty / over-cap (`MAX_BASKET_LENGTH = 64`) lists, rejects
+  duplicate erc20s. Successful calls write the new prime config and
+  increment `nonce` by 1. Returns `option Storage.t`.
+- `refreshBasket` is total over `Storage.t × list AssetStatus.t`.
+  Faithful to `BasketLibP1.nextBasket`: surfaces good prime collateral
+  in order, then for each target name with positive unsound weight,
+  selects up to `BackupConfig.max` good backups and distributes the
+  unsound weight evenly (floor quotient) across them. Sets
+  `disabled = true` iff the next-basket selection failed; otherwise
+  writes the new basket and increments `nonce`.
 
-The simulation header is explicit: "the asset-registry / oracle /
-decimals layer is intentionally OUT of scope here."
+**Audit theorems** (in `Audit.v`):
+- `audit_setPrimeBasket_validates`: storage validity preserved.
+- `audit_refreshBasket_preserves_validity`: storage validity preserved
+  on both success and failure paths.
+- `audit_refreshBasket_targetAmt_conservation`: in the all-sound case,
+  exact targetAmt sum conservation across the refresh.
+- `audit_refreshBasket_disabled_implies_no_backup`: contrapositive
+  characterising when disabled flips to true.
+
+**Gaps that remain** (intentionally out of scope per the simulation
+header):
+- Asset-registry indirection — sim TAKES the AssetStatus list as
+  input rather than reading it from a registry.
+- Oracle layer — `pegPrice` etc. not consulted.
+- Full Collateral status state machine — already modeled in
+  `simulations/Collateral.v`; this sim consumes the boolean DISABLED
+  outcome via `AssetStatus.t`.
+- Governance modifier on `setPrimeBasket` (gated, not modeled).
+- `requireConstantConfigTargets` (reweightable RTokens); the
+  `forceSetPrimeBasket` / spell entry path is not modeled separately.
+- Per-backup `targetPerRef` weighting: production divides
+  `unsoundPrimeWt / (targetPerRef * size)`; sim sets `targetPerRef =
+  FIX_ONE` and divides by `size` alone — same algebraic shape, the
+  oracle-derived `targetPerRef` lookup is the elided piece.
+- Warmup period, basket history, `lastCollateralized`, governance
+  flags (`reweightable`, `enableIssuancePremium`).
+- Quote-time `revenueHiding` decay and per-token issuance premium
+  (modeled separately in `IssuancePremium.v`).
 
 ## DutchTrade
 
@@ -405,8 +447,28 @@ Status as of the audit-driven follow-up commits:
    model of production's uint48 truncation arithmetic — both larger
    changes than fit this pass.
 
-6. **Per-domain operation surface expansion. ✗ DEFERRED.**
-   The remaining big surfaces are substantial work and stay deferred:
+6. **Per-domain operation surface expansion. ◐ PARTIAL.**
+
+   - **BasketHandler `setPrimeBasket` / `refreshBasket`. ✓ DONE.**
+     The simulation now carries a `Storage.t` record (basket,
+     primeBasket, backupConfigs, nonce, disabled) alongside the
+     legacy quote math kernel. `setPrimeBasket` validates target-
+     amount bounds, basket size, and erc20 uniqueness, then writes
+     the prime config and increments the nonce. `refreshBasket` is
+     a total operation that consumes a per-erc20 AssetStatus list
+     and rebuilds the basket from good primes plus per-target backup
+     selection (mirroring `BasketLibP1.nextBasket`'s structure),
+     setting `disabled = true` only when the next-basket selection
+     fails. Asset-registry / oracle indirection are explicitly
+     out of scope — the AssetStatus list is the modeled boundary.
+     Validity preservation, target-amount conservation, and
+     contrapositive disabled-iff-no-backup theorems are pinned in
+     `BasketHandler_validity.v` / `BasketHandler_chain.v`. CAS
+     witnesses live under `cas/basket_handler/set_prime_basket.gp`
+     and `refresh_basket.gp`. See the BasketHandler section above
+     for the full coverage map.
+
+   The remaining big surfaces stay deferred:
 
    - StRSR `seizeRSR` and `cancelUnstake`. `seizeRSR` requires
      modeling era reset, which in turn requires a `era` /
@@ -425,13 +487,7 @@ Status as of the audit-driven follow-up commits:
      basket-needs lifecycle; each of those needs its own simulation
      module before the full `forwardRevenue` can be assembled.
 
-   - BasketHandler's `setPrimeBasket` / `refreshBasket`. Same shape
-     — the simulation today is `BasketHandlerQuoteMath`, covering
-     only `quote` semantics. The lifecycle operations require
-     governance state (basket nonce, prime/reference distinction),
-     `swapRegistered` semantics, and the asset-registry interaction.
-
-   These three are tracked as future work; the audit document now
+   These two are tracked as future work; the audit document now
    serves as the scoping artifact for that effort.
 
 7. **DAO-fee leg in Distributor. ✓ DONE.**
