@@ -787,21 +787,74 @@ production's revert).
 6. The `init()` derivation `worstPrice = sellLow.mulDiv(FIX_ONE - maxTradeSlippage, buyHigh, FLOOR)` and `bestPrice = sellHigh.div(buyLow, CEIL)` (production lines 209–214) is unmodeled. Lemmas about `bidPrice` apply to *any* `(bestPrice, worstPrice)` satisfying `Valid.t`, not specifically those production's init produces.
 7. The CAS xchecks (`cas/dutch_trade/`) sample the price curve at concrete timestamps and pin specific output values — they pair with the simulation lemmas to give a faithful coverage on the math, even where the lifecycle is unmodeled.
 
-## GnosisTrade
+## GnosisTrade (gold-standard audit)
 
-**Settlement-floor math.** Models `minBuyAmount`, `worstCasePrice`,
-`settle`, `settlement_floor`, `canSettle`, `cancellationEndTime`.
+The simulation captures **the settlement-floor math: `minBuyAmount`
+(the post-#1283 CEIL chain mirroring TradeLib.prepareTradeSell lifted
+into qBuyTok), `worstCasePrice` in D27, the `settle` function with
+its `boughtAmt+1` / `max(soldAmt, 1)` defensive paddings, the
+`settlement_floor` inversion theorem, the early-return when
+`sellBalAfter >= initBal` (production line 219 guard), `canSettle`
+gating, and `cancellationEndTime` formula**. It omits **the
+`TradeStatus` state machine, the `init()` lifecycle (auction
+creation via Gnosis EasyAuction, the `_sellAmount` fee-numerator
+adjustment, the `minBuyAmtPerOrder` derivation, the `safeApprove`
+allowance, the storage writes), the `transferToOriginAfterTradeComplete`
+escape hatch, the `isAuctionCleared` view that reads
+`gnosis.auctionData(auctionId)`, the broker / origin / gnosis
+external pointers, and the safeTransfer side effects inside
+`settle()`**. The proofs against this model are correct for the
+settle math; transferring them requires (i) the trade is OPEN,
+(ii) the caller is `origin`, (iii) the auction is cleared.
 
-**Gaps**:
-- Init / lifecycle not modeled at the state level; `settle` is a pure
-  function over inputs.
-- The actual interaction with Gnosis EasyAuction (auction creation,
-  bid registration, defensive +1 padding origins) not modeled.
-- `FEE_DENOMINATOR` constant carried but the auction-fee gap finding
-  (`CAS_additional_findings.v`) covers the case where `feeNumerator > 0`
-  diverges from `worstCasePrice` — the sim's `worstCasePrice` doesn't
-  account for the fee numerator. (This is the formalized bug; the
-  simulation captures the post-fee-aware computation.)
+### State omitted
+
+| Production state | Purpose | Simulation analog |
+|---|---|---|
+| `KIND` (constant `TradeKind.BATCH_AUCTION`) | Identifies auction kind | None. |
+| `FEE_DENOMINATOR = 1000` | Used in `_sellAmount` adjustment for Gnosis fee | **`FEE_DENOMINATOR ✓`** as constant; not used in any sim function (header notes the post-#1175 fee-aware path is what the sim captures). |
+| `CANCEL_WINDOW = 9e17` (D18) | First 90% of auction is cancellable | **`CANCEL_WINDOW ✓`** in `cancellationEndTime`. |
+| `MAX_ORDERS = 5000` | Cap on auction order count for gas | None. |
+| `DEFAULT_MIN_BID = FIX_ONE / 100` | Minimum bid floor used in `minBuyAmtPerOrder` | None. |
+| `gnosis` (immutable IGnosis) | Gnosis EasyAuction contract | None. |
+| `status` (TradeStatus) | NOT_STARTED → OPEN → PENDING → CLOSED state machine + reentrancy guard | **Modeled as boolean `status_open` in `canSettle`** — not as a full state machine. |
+| `gnosis_DEPRECATED` (IGnosis) | Storage-compat slot from pre-4.0.0 (gnosis was non-immutable) | None. |
+| `auctionId` (uint256) | Returned by `gnosis.initiateAuction()` | None. |
+| `broker` (IBroker) | Cloning factory; `reportViolation` callback when clearingPrice < worstCasePrice | None. |
+| `origin` (address) | The originating trader; only `origin` may call `settle()` | None. |
+| `sell`, `buy` (IERC20Metadata) | Token pointers | None. |
+| `initBal` (uint256, qSellTok) | Sell-token balance at `init()` | **Passed in as input to `settle`** — not stored in sim. |
+| `sellAmount` (uint192, sellTok D18) | Whole-token sell quantity (≠ initBal due to fee adjustment) | **Implicit in `minBuyAmount`'s sellAmount input.** |
+| `endTime` (uint48) | Timestamp after which the auction can be settled | **Passed as input to `canSettle`.** |
+| `worstCasePrice` (uint192, D27) | Set in init(); checked in settle() | **Passed as input to `settle`.** |
+
+### Operations omitted
+
+| Production function | Effect | Modeled? |
+|---|---|---|
+| `init(IBroker broker_, address origin_, uint48 batchAuctionLength, TradeRequest req)` (line 91) — state-locked | Validates sell/min-buy ≤ uint96; computes `worstCasePrice = shiftl_toFix(req.minBuyAmount, 9).divu(req.sellAmount, FLOOR)`; computes `_sellAmount` adjusted for Gnosis fee; computes `minBuyAmtPerOrder`; calls `safeApproveFallbackToMax`; calls `gnosis.initiateAuction(...)`; stores `cancellationEndTime`, `endTime`, `auctionId`, sell/buy/origin/broker | **Partial.** The `worstCasePrice` formula is captured by sim's `worstCasePrice` (line 117). The `_sellAmount = req.sellAmount * FEE_DENOMINATOR / (FEE_DENOMINATOR + gnosis.feeNumerator())` fee-adjustment, `minBuyAmtPerOrder` derivation (max of `minBuyAmount / MAX_ORDERS` and `DEFAULT_MIN_BID.shiftl_toUint(buy.decimals())`), `safeApprove` allowance, `gnosis.initiateAuction` call, and storage writes are **all unmodeled**. |
+| `settle()` (line 185) — state-locked, origin-only | Calls `gnosis.settleAuction(auctionId)` if not yet cleared; transfers sell/buy balances to origin; checks `clearingPrice < worstCasePrice` and calls `broker.reportViolation()` | **Partial.** The clearing-price math (`shiftl_toFix(adjustedBuyAmt, 9).divu(adjustedSoldAmt, FLOOR)`) and the violation comparison are captured in sim's `settle`. The `gnosis.settleAuction(auctionId)` call, the `assert(isAuctionCleared())` post-condition, the `safeTransfer(origin, sellBal)` and `safeTransfer(origin, boughtAmt)` interactions, the `broker.reportViolation()` callback, and the `require(msg.sender == origin)` auth gate are **all unmodeled**. |
+| `transferToOriginAfterTradeComplete(IERC20)` (line 235) | Post-CLOSED escape hatch | **No.** |
+| `canSettle()` (line 242) view | Returns `status == OPEN && endTime <= block.timestamp` | **`canSettle` ✓** as a pure predicate over `(now, endTime, status_open)`. |
+| `isAuctionCleared()` (line 248) private view | Reads `gnosis.auctionData(auctionId).clearingPriceOrder != bytes32(0)` | **No** — sim assumes the auction has cleared and operates on post-clearance balances. |
+
+### What the simulation *does* faithfully model
+
+- `minBuyAmount(sellAmount, slippage, sellLow, buyHigh, buyDec)`: the full TradeLib chain into qBuyTok — `inner = mul(sellAmount, FIX_ONE - slippage, CEIL)`, `b = safeMulDiv_ceil(inner, sellLow, buyHigh)`, `shiftl_toUint_ceil(b, buyDec)`. All three rounding stages CEIL — bidder-favorable, keeping the settlement floor at-or-above the exact-rational ideal.
+- `worstCasePrice(minBuyAmount_qBuy, sellAmount_qSell)`: the FLOOR-rounded `(minBuyAmount * 1e27) / sellAmount` (sim line 117–122). FLOOR is trader-favorable: lowers the floor by < 1 D27 wei.
+- `settle(initBal, sellBalAfter, boughtAmt, worstCase)`: the `if (sellBal < initBal)` guard at production line 219 is the early-return at sim line 154. When the guard fires (i.e. the trade returned 100% of the sell tokens), `checked = false` and no violation check happens. Otherwise the sim computes `soldAmt = initBal - sellBalAfter`, `adjustedSoldAmt = max(soldAmt, 1)`, `adjustedBuyAmt = boughtAmt + 1`, `clearingPrice = (adjustedBuyAmt * 1e27) / adjustedSoldAmt FLOOR`, `violation = clearingPrice < worstCase`. The +1 / max(_, 1) defensive paddings exactly mirror production lines 222–227.
+- `settlement_floor(worstCase, soldAmt)`: the inversion of the violation check — the minimum `boughtAmt` keeping `clearingPrice >= worstCasePrice` is `ceil(worstCasePrice * max(soldAmt, 1) / 1e27) - 1`, clamped at 0. This is the load-bearing post-condition for "successful settle implies trader was paid at least the floor".
+- `cancellationEndTime(startTime, auctionLength) = startTime + auctionLength * CANCEL_WINDOW / FIX_ONE` (sim line 193–194 = production line 150–152).
+
+### Implications for proof transferability
+
+1. The most surprising divergence: `worstCasePrice` is set in `init()` from `req.minBuyAmount` (which is what TradeLib hands the broker). The sim's `worstCasePrice` is *parameterised* on the qBuy / qSell scalars rather than tied to the TradeLib chain — so a CAS-side counterexample (`CAS_additional_findings.v`) where production's `init()` passes a `req.minBuyAmount` that doesn't account for `gnosis.feeNumerator()` corresponds to an integration-level gap, not a sim-level one. Header is honest about this: "the simulation captures the post-fee-aware computation".
+2. The full state machine (NOT_STARTED → OPEN → PENDING → CLOSED) is collapsed to a single boolean (`status_open` in `canSettle`). Lemmas about `settle` apply to *any* OPEN auction, regardless of whether the production state machine has performed the OPEN→PENDING transition (which is a reentrancy guard, not a substantive change to the math).
+3. The `gnosis.settleAuction(auctionId)` external call at production line 197 is unmodeled. Sim's `settle` operates on post-clearance balances directly. Lemmas about settlement assume the Gnosis-side cleared correctly; failure modes there (auction not cleared, bytes32(0) `clearingPriceOrder`) are out of scope.
+4. The `safeTransfer(origin, sellBal)` / `safeTransfer(origin, boughtAmt)` interactions at production lines 215–216 are unmodeled. Lemmas about settle bookkeeping say nothing about whether the funds actually reach origin — only about the violation flag.
+5. The `_sellAmount` fee-adjustment in `init()` (production lines 119–125: `_sellAmount = req.sellAmount * FEE_DENOMINATOR / (FEE_DENOMINATOR + gnosis.feeNumerator())`) reduces what's sent to Gnosis to compensate for the fee that Gnosis takes. Sim does not model this; the `worstCasePrice` is computed from `req.minBuyAmount` and `req.sellAmount` (the originator-side numbers), not from `_sellAmount` (the post-fee number). This is the bug pinned in `proofs/CAS_additional_findings.v`.
+6. The `broker.reportViolation()` callback is unmodeled — lemmas about violation surface a boolean flag, not the broker side effect.
+7. The `cancel`-window enforcement is partially modeled: `cancellationEndTime` is computed but the actual revert path inside Gnosis (when cancellation is attempted past it) lives outside this simulation.
 
 ## Collateral
 
