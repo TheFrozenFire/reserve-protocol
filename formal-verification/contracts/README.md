@@ -21,34 +21,23 @@ contracts/
 ├── BackingManagerMathHarness.sol  -- forwardRevenue accounting
 ├── DistributorMathHarness.sol  -- distributeAmounts share split
 ├── StandaloneThrottle.sol      -- self-contained Throttle (no _relaxed/ deps)
-├── _relaxed/                   -- pragma-relaxed copies (^0.8.28) of FixLib + Throttle
-│   ├── Fixed.sol
-│   └── Throttle.sol
-└── _probe/                     -- bisect probes characterizing the
-    ├── BisectFix1_div.sol         optimizer crash surface
-    ├── BisectFix2_mul_ceil.sol
-    ├── BisectFix3_just_import.sol
-    ├── ImportProbe1.sol
-    ├── ImportProbe2.sol
-    └── ImportProbe3.sol
+└── _relaxed/                   -- pragma-relaxed copies (^0.8.28) of FixLib + Throttle
+    ├── Fixed.sol
+    └── Throttle.sol
 ```
 
-## Why each subdirectory exists
+Investigation artifacts (`_probe/`) used to characterize the
+`solc-rocq` optimizer crash surface live under
+[`../notes/probes/`](../notes/probes/), not here.
 
-### `_relaxed/`
+## Why `_relaxed/` exists
+
 The production `Fixed.sol` and `Throttle.sol` declare `pragma solidity
 0.8.28` (exact). The locally-built `solc-rocq` reports its version as
 `0.8.29-develop` and refuses files pinned to a different exact version.
 Rather than fight the version check, `_relaxed/` holds copies pragma'd to
 `^0.8.28` so the harnesses can `import "./_relaxed/Fixed.sol"`. The
 content is identical to the production source — only the pragma differs.
-
-### `_probe/`
-Single-function probe contracts used to bisect which Solidity constructs
-trip `solc-rocq`'s optimizer. Each file isolates one variable: `BisectFix1`
-exercises `FixLib.div` alone; `BisectFix2` adds `CEIL` rounding;
-`BisectFix3` adds an unused FixLib import. Useful for upstream bug
-reports if you hit a fresh optimizer crash on a new harness.
 
 ## Why these files don't follow project lint style
 
@@ -79,4 +68,6 @@ work that would consume them is parked (see `../README.md`).
 2. Keep all function signatures on a single line — the optimizer
    crashes on multi-line signatures in non-trivial cases.
 3. Test the build: `bash scripts/solc-rocq contracts/<NewHarness>.sol --ir-rocq`.
-4. If solc-rocq crashes, drop into `_probe/` and bisect.
+4. If solc-rocq crashes, see [`../notes/probes/`](../notes/probes/) for
+   the existing bisect probes and add a new one isolating the
+   triggering construct.

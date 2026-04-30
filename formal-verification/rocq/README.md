@@ -85,37 +85,21 @@ The `_RocqProject` is the build manifest. Order matters for cross-file
 dependencies: simulations precede their proofs; per-domain proofs precede
 the integration files; integration files precede `EndToEnd*.v`.
 
-## Discipline (worth knowing if you add files here)
+## Adding files / proof discipline
 
-- **Mark FixLib operations `Opaque` before destructs.** The simulation's
-  `powu` definition contains `Z.to_nat (Z.log2 _)` which Coq tries to
-  reduce eagerly during `inversion`. The result is OOM. Before any
-  `injection`/`destruct` of a hypothesis like `melt s now bal = (s', amt)`,
-  declare `Opaque FixLib.powu FixLib.mulu_toUint FixLib.minus FixLib.divrnd`.
-- **Use `injection ... as Hs'_eq Hamt_eq; subst <name>` over `inversion ... subst`.**
-  The latter does maximal substitution and forces evaluation of the giant
-  arithmetic expressions; the former keeps them behind named hypotheses.
-- **Do NOT install `Z.to_euclidean_division_equations` zify hook.**
-  It explodes `lia` runtime on these proofs.
-- **Module-name collisions** are common when both `Reserve.simulations.X`
-  and `Reserve.proofs.X` are in scope. The Rocq compiler rejects bare
-  `Import X` as ambiguous. Fully qualify: `Import Reserve.simulations.X.X`
-  and `Import Reserve.proofs.X.XProofs`.
-- **`Notation` not `Theorem ... :=` for re-exports.** Coq's `Theorem`
-  with `:=` requires a type annotation; `Notation` gives lossless
-  re-export with the original type preserved.
+Proof-discipline gotchas (how to avoid OOM on `powu`, when to use
+`injection` over `inversion`, module-name collision handling, the
+`Notation` re-export pattern, etc.) are collected in
+[`WISDOM.md`](WISDOM.md). Read it before adding new `.v` files.
 
 ## Parked workstreams
 
-Two paths were investigated and parked with diagnostic notes (see
-`../README.md` for full details):
+Two paths were investigated and parked with diagnostic notes:
 
 1. **Yul-equivalence proofs** (`run_<fn>` lemmas tying the simulations
-   to the auto-translated Yul-derived Rocq) need an upstream change in
-   `rocq-of-solidity`: the runtime substrate has no `Impossible`
-   constructor in `RunO.t`. Even pure FixLib functions are blocked
-   structurally — the harness translations don't emit shallow companion
-   files. See `proofs/Fixed_yul_equiv.v` (off the build) for the
-   diagnosis.
+   to the auto-translated Yul-derived Rocq) need upstream changes in
+   `rocq-of-solidity` (semantic + structural substrate gaps). Full
+   diagnosis in
+   [`../notes/yul_equivalence_diagnostic.md`](../notes/yul_equivalence_diagnostic.md).
 2. **Auto-translation campaign** beyond the math harnesses: `solc-rocq`
    exhibits unpredictable optimizer crashes on broader Solidity inputs.

@@ -1,6 +1,37 @@
-(** System-level end-to-end joint-bound theorem.
+(** System-level end-to-end joint-bound theorem (initial 3-domain version).
 
-    A modest but real cross-domain correctness statement: the headline
+    This file is the **first** of three system-level joint-bound
+    theorems in the tree. They form a progression of strengthening
+    cross-domain compositions:
+
+      1. [EndToEnd.v]              - 3 storage domains  (this file)
+                                     Throttle + Furnace + StRSR ratio
+                                     Bound: [<= 5 * UINT256_MAX]
+
+      2. [EndToEnd_strengthened.v] - 8 storage-state domains
+                                     Adds Collateral, DutchTrade, Rebalance,
+                                     and BackingManager (BasketState +
+                                     SurplusSplit), with Furnace and StRSR
+                                     contributions widened.
+                                     Bound: [<= 34 * UINT256_MAX]
+
+      3. [EndToEnd_complete.v]     - all 13 domains (8 storage + 5 functional)
+                                     Adds the call-arg-bounded functional
+                                     domains (TradeLib, IssuancePremium,
+                                     GnosisTrade, BasketHandler, Distributor)
+                                     via explicit envelope hypotheses.
+                                     Bound: [<= 43 * UINT256_MAX]
+
+    The [Audit.v] handoff index re-exports [EndToEnd_complete] as the
+    headline [audit_endtoend_jointly_bounded] and this file's three
+    domains as [audit_endtoend_storage_jointly_bounded]'s strict
+    subset. The [_strengthened] variant is the right intermediate
+    handle for callers that have storage states but no per-call
+    arguments to discharge functional-domain envelopes.
+
+    --------------------------------------------------------------- *)
+
+(** A modest but real cross-domain correctness statement: the headline
     uint256 quantities maintained by three independent storage domains
     — the supply Throttle, the Furnace, and the StRSR module — are
     each individually bounded by their per-domain validity invariants,
