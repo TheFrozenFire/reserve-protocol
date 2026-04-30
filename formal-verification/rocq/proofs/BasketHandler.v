@@ -48,12 +48,12 @@ Qed.
 
 (** ===== INV-Q1 (lifted to the basket-wide list): pointwise FLOOR <= CEIL. ===== *)
 Lemma quote_floor_le_ceil
-    (s : Storage) (baskets : U256.t) :
+    (b : Basket) (baskets : U256.t) :
   Forall2 (fun pf pc => snd pf <= snd pc)
-          (quote s baskets RoundingMode.FLOOR)
-          (quote s baskets RoundingMode.CEIL).
+          (quote b baskets RoundingMode.FLOOR)
+          (quote b baskets RoundingMode.CEIL).
 Proof.
-  induction s as [|e rest IH]; simpl.
+  induction b as [|e rest IH]; simpl.
   - apply Forall2_nil.
   - apply Forall2_cons.
     + simpl. apply quote_one_floor_le_ceil.
@@ -72,10 +72,10 @@ Proof. reflexivity. Qed.
 (** Stronger empty-basket statement: with a zero-length basket, every
     invocation of [quote] is the empty list — including the all-zeros
     edge case where the call has nothing to do. *)
-Lemma quote_empty_baskets_zero (s : Storage) (mode : RoundingMode.t) :
-  Forall (fun p => snd p = 0) (quote s 0 mode).
+Lemma quote_empty_baskets_zero (b : Basket) (mode : RoundingMode.t) :
+  Forall (fun p => snd p = 0) (quote b 0 mode).
 Proof.
-  induction s as [|e rest IH]; simpl.
+  induction b as [|e rest IH]; simpl.
   - apply Forall_nil.
   - apply Forall_cons; [|exact IH].
     simpl. unfold quote_one, FixLib.mulu_toUint, FixLib.divrnd.
@@ -131,9 +131,9 @@ Qed.
     never exceeds the input [baskets] amount. This is the per-asset
     statement of the round-trip safety property. *)
 Lemma quote_round_trip_floor
-    (s : Storage) (baskets : U256.t) :
+    (b : Basket) (baskets : U256.t) :
   0 <= baskets ->
-  Forall (fun e => 0 <= e.(BasketEntry.refAmt)) s ->
+  Forall (fun e => 0 <= e.(BasketEntry.refAmt)) b ->
   Forall
     (fun p =>
        redeem_one (fst p) (snd p) <= baskets)
@@ -141,10 +141,10 @@ Lemma quote_round_trip_floor
        (fun e =>
           (e.(BasketEntry.refAmt),
            quote_one e.(BasketEntry.refAmt) baskets RoundingMode.FLOOR))
-       s).
+       b).
 Proof.
-  intros Hb Hval.
-  induction s as [|e rest IH]; simpl.
+  intros Hbk Hval.
+  induction b as [|e rest IH]; simpl.
   - apply Forall_nil.
   - inversion Hval as [|? ? Hhd Htl]; subst.
     apply Forall_cons.

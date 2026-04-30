@@ -102,7 +102,7 @@ Qed.
     valid uint192 fixed-point value, and the per-asset quote against
     [baskets] fits in uint256 for the chosen rounding mode. *)
 Definition StorageInputBounded
-    (s : BasketHandler.Storage) (baskets : U256.t) (mode : RoundingMode.t) : Prop :=
+    (s : BasketHandler.Basket) (baskets : U256.t) (mode : RoundingMode.t) : Prop :=
   Forall (fun e => InputBounded.t e.(BasketEntry.refAmt) baskets mode) s.
 
 (** Every quantity in [quoteQuantities] is bounded by [UINT256_MAX].
@@ -110,7 +110,7 @@ Definition StorageInputBounded
     full {qTok} payload returned to issuance / redemption fits in
     uint256. *)
 Lemma quoteQuantities_uint256_bounds
-    (s : BasketHandler.Storage) (baskets : U256.t) (mode : RoundingMode.t) :
+    (s : BasketHandler.Basket) (baskets : U256.t) (mode : RoundingMode.t) :
   StorageInputBounded s baskets mode ->
   Forall (fun q => q <= UINT256_MAX) (quoteQuantities s baskets mode).
 Proof.
@@ -128,7 +128,7 @@ Qed.
     [UINT256_MAX]. Combines [quoteQuantities_nonneg] (validity) with
     the upper bound above. *)
 Lemma quoteQuantities_uint256_range
-    (s : BasketHandler.Storage) (baskets : U256.t) (mode : RoundingMode.t) :
+    (s : BasketHandler.Basket) (baskets : U256.t) (mode : RoundingMode.t) :
   0 <= baskets ->
   StorageInputBounded s baskets mode ->
   Forall (fun q => 0 <= q <= UINT256_MAX) (quoteQuantities s baskets mode).
@@ -156,7 +156,7 @@ Qed.
     structurally bounded by [UINT256_MAX]. We expose this as a
     standalone predicate so callers that range over basket entries
     can quote a uint256 cardinality without re-deriving it. *)
-Definition StorageBounded (s : BasketHandler.Storage) : Prop :=
+Definition StorageBounded (s : BasketHandler.Basket) : Prop :=
   Z.of_nat (length s) <= UINT256_MAX.
 
 Lemma StorageBounded_nil : StorageBounded nil.
