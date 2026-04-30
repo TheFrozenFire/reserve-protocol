@@ -39,6 +39,12 @@ Require Import Reserve.proofs.Integration_revenue_full_circuit.
 Require Import Reserve.proofs.Collateral.
 Require Import Reserve.proofs.Collateral_validity.
 
+(* Section 9 - Plugin-specific collateral overrides. *)
+Require Import Reserve.proofs.CTokenFiatCollateral.
+Require Import Reserve.proofs.CTokenFiatCollateral_validity.
+Require Import Reserve.proofs.CurveStableCollateral.
+Require Import Reserve.proofs.CurveStableCollateral_validity.
+
 (* Section 6b - BasketHandler lifecycle. *)
 Require Import Reserve.proofs.BasketHandler_validity.
 Require Import Reserve.proofs.BasketHandler_chain.
@@ -325,3 +331,70 @@ Notation audit_unstake_seize_withdraw_preserves_validity :=
     queue order and the conservation invariant. *)
 Notation audit_cancelUnstake_preserves_validity :=
   StRSRValidity.cancelUnstake_last_preserves_validity.
+
+(** ============================================================
+    Section 9 - Plugin-specific collateral overrides.
+
+    The abstract [Collateral.refresh] state machine in Section 6
+    captures the shared FiatCollateral / AppreciatingFiatCollateral
+    surface. Production deploys plugin-specific overrides on top of
+    that abstraction. The two highest-deployment plugins —
+    CTokenFiatCollateral (Compound v2 cToken-backed) and
+    CurveStableCollateral (Curve LP token-backed) — each carry their
+    own [refPerTok] semantics and [refresh] override. The lemmas
+    here pin the load-bearing properties of those overrides on top
+    of the abstract base.
+    ============================================================ *)
+
+(** [refPerTok_of_rate] is monotone in the cToken's
+    [exchangeRateStored] across both shift branches (multiply when
+    refDecimals <= 8; floor-div when refDecimals > 8). Composes with
+    the abstract base's [updateExposed] dichotomy to give
+    "exposed-monotonic under monotone accrual". *)
+Notation audit_ctoken_refPerTok_monotone_in_rate :=
+  CTokenFiatCollateralProofs.refPerTok_of_rate_monotone.
+
+(** Plugin's [refresh] sets [statusOf whenDefault now = DISABLED]
+    whenever [exchangeRateCurrent()] reverts (modeled as
+    [accrued = false]). Pins the plugin-specific revert path in
+    CTokenFiatCollateral.sol#L48-L59. *)
+Notation audit_ctoken_refresh_accrual_revert_disables :=
+  CTokenFiatCollateralProofs.refresh_accrual_revert_disables.
+
+(** Plugin [refresh] preserves the CToken [Valid.t] extension
+    (refDecimals in 1..30, rateSnapshot uint256) AND the abstract
+    base's [Collateral.Valid.t]. Composition of the abstract
+    [refresh_preserves_validity] with the plugin-specific
+    markStatus(DISABLED) on the accrual-revert branch. *)
+Notation audit_ctoken_refresh_preserves_validity :=
+  CTokenFiatCollateralValidity.refresh_preserves_validity.
+
+(** DISABLED is preserved across the plugin override. Both branches
+    (accrued=true / accrued=false) preserve the parent's terminal
+    DISABLED property. *)
+Notation audit_ctoken_refresh_disabled_terminal :=
+  CTokenFiatCollateralProofs.refresh_disabled_terminal.
+
+(** Curve plugin: the hard-default trigger fires iff
+    [virtualPrice < exposedReferencePrice]. Closes the
+    "revenue-hiding band IS the hard-default threshold" claim
+    pinned by CV-7 in cas/collateral/curve_virtual_price_drop.gp. *)
+Notation audit_curve_hardDefault_iff_vp_below_exposed :=
+  CurveStableCollateralProofs.hardDefault_iff_vp_below_exposed.
+
+(** Curve plugin's [refresh] sets [statusOf whenDefault now = DISABLED]
+    whenever the outer [get_virtual_price()] reverts ([pricedRevert =
+    true]). Pins CV-4 of the CAS witness. *)
+Notation audit_curve_refresh_pricedRevert_disables :=
+  CurveStableCollateralProofs.refresh_pricedRevert_outer_disables.
+
+(** Curve plugin [refresh] preserves the Curve [Valid.t] extension
+    (virtualPriceLast uint192, poolNTokens in [2,4],
+    pegBottom > 0) AND the abstract base's [Collateral.Valid.t]. *)
+Notation audit_curve_refresh_preserves_validity :=
+  CurveStableCollateralValidity.refresh_preserves_validity.
+
+(** DISABLED is terminal across the Curve plugin override (both the
+    outer-revert and the success branches). Pins CV-8. *)
+Notation audit_curve_refresh_disabled_terminal :=
+  CurveStableCollateralProofs.refresh_disabled_terminal.
