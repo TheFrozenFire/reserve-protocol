@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Build the Reserve formal-verification Rocq tree natively (no Docker).
+# Compiles simulations, proofs, and cross-checks against the native
+# rocq-of-solidity library at ~/git/reserve/_tools/rocq-of-solidity.
+#
+# Prereqs (one-time):
+#   opam switch rocq820 with:
+#     coq.8.20.1, coq-hammer-tactics, coq-coqutil, coq-record-update
+#   Compiled rocq-of-solidity tree (run `make all` in
+#     ~/git/reserve/_tools/rocq-of-solidity/rocq/RocqOfSolidity once).
+#
+# Note: Docker (rocq-build:full image) is still required for solc-rocq
+# auto-translation runs, but no longer for proof compilation.
+#
+# Usage: bash scripts/rocq-build [<file.v> ...]
+#   With no args, compiles all .v files listed in rocq/_RocqProject in order.
+
+set -euo pipefail
+
+ROCQ_TREE="${ROCQ_TREE:-$HOME/git/reserve/_tools/rocq-of-solidity}"
+PROTOCOL_TREE="${PROTOCOL_TREE:-$HOME/git/reserve/protocol}"
+RESERVE_ROCQ="$PROTOCOL_TREE/formal-verification/rocq"
+
+eval "$(opam env --switch=rocq820 --set-switch)"
+
+if [[ $# -eq 0 ]]; then
+  files=()
+  while IFS= read -r line; do
+    [[ "$line" =~ \.v$ ]] && files+=("$line")
+  done < "$RESERVE_ROCQ/_RocqProject"
+else
+  files=("$@")
+fi
+
+for f in "${files[@]}"; do
+  echo "==> coqc $f"
+  coqc -R "$ROCQ_TREE/rocq/RocqOfSolidity" RocqOfSolidity \
+       -R "$RESERVE_ROCQ" Reserve \
+       -impredicative-set -w -stdlib-vector \
+       "$RESERVE_ROCQ/$f"
+done
+
+echo "All Rocq targets compiled successfully."

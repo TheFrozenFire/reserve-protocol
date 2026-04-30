@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# solc-rocq — wrapper that invokes the rocq-of-solidity solc fork
+# inside a coqorg/coq Docker container (the binary is amd64 ELF).
+#
+# Usage:
+#   ./solc-rocq <flags> <input.sol>
+#
+# Mounts:
+#   - rocq-of-solidity tree at /work (so /work/build/solc/solc is available)
+#   - protocol tree at /protocol (so input paths from formal-verification/contracts/ work)
+#
+# Working directory inside the container is /protocol so relative imports resolve.
+
+set -euo pipefail
+
+ROCQ_TREE="/Users/jmart/git/reserve/_tools/rocq-of-solidity"
+PROTOCOL_TREE="/Users/jmart/git/reserve/protocol"
+
+if [[ ! -x "$ROCQ_TREE/build/solc/solc" ]]; then
+  echo "solc-rocq: build/solc/solc not found at $ROCQ_TREE — run the build first" >&2
+  exit 1
+fi
+
+docker run --rm \
+  -v "$ROCQ_TREE":/work \
+  -v "$PROTOCOL_TREE":/protocol \
+  -w /protocol \
+  --platform=linux/amd64 \
+  coqorg/coq:8.20-ocaml-4.14-flambda \
+  /work/build/solc/solc \
+    --base-path /protocol \
+    --include-path /protocol/node_modules \
+    --allow-paths /protocol \
+    "$@"
