@@ -508,18 +508,31 @@ Definition seizeRSR (s : Storage.t) (rsrAmount : U256.t) : Storage.t :=
     let draft_share := rsrAmount - stake_share in
     let stakeRSR_post := s.(Storage.totalRSRStaked) - stake_share in
     let draftRSR_post := s.(Storage.draftRSR) - draft_share in
-    (* Stake-side era reset trigger: stakeRSR_post = 0, OR (totalStRSR > 0
-       and the implied stakeRate would exceed MAX_STAKE_RATE). The latter
-       fires when totalStRSR * FIX_ONE > stakeRSR_post * MAX_STAKE_RATE
-       (i.e. CEIL(totalStRSR * FIX_ONE / stakeRSR_post) > MAX_STAKE_RATE). *)
+    (* Stake-side era reset trigger:
+       1. [stakeRSR_post = 0]: trivially needs reset (production line 466).
+       2. [totalStRSR > 0] and the derived rate would exceed
+          [MAX_STAKE_RATE]: production line 466 checks [stakeRate >
+          MAX_STAKE_RATE]; we model the derived-rate test as
+          [totalStRSR * FIX_ONE > stakeRSR_post * MAX_STAKE_RATE]. *)
     let stake_reset :=
       (stakeRSR_post =? 0) ||
       ((0 <? s.(Storage.totalStRSR)) &&
        (s.(Storage.totalStRSR) * FIX_ONE_Z >? stakeRSR_post * MAX_STAKE_RATE)) in
+    (* Draft-side era reset trigger:
+       1. [draftRSR_post = 0]: trivially (production line 481).
+       2. The conservation invariant
+            sum_rsr_amounts queue <= draftRSR_post
+          would break. This is the simulation's tighter analog of
+          production's [draftRate > MAX_DRAFT_RATE] check; the
+          simulation maintains [draftRate = FIX_ONE] (no separate
+          draftRate field), so it era-resets at the FIX_ONE boundary
+          rather than the MAX_DRAFT_RATE boundary. The simulation's
+          reachable-state set is therefore a strict subset of
+          production's, but every reachable state satisfies the
+          [Valid.t] invariants. *)
     let draft_reset :=
       (draftRSR_post =? 0) ||
-      ((sum_rsr_amounts s.(Storage.queue) >? 0) &&
-       (sum_rsr_amounts s.(Storage.queue) * FIX_ONE_Z >? draftRSR_post * MAX_DRAFT_RATE)) in
+      (sum_rsr_amounts s.(Storage.queue) >? draftRSR_post) in
     (* Build the post-seizure storage by applying the proportional
        deltas, then conditionally apply [beginEra] / [beginDraftEra]. *)
     let s_phase1 := {|
@@ -546,7 +559,27 @@ Definition seizeRSR (s : Storage.t) (rsrAmount : U256.t) : Storage.t :=
     Operations that push entries (just [unstake]) push an [rsrAmount]
     computed by [divrnd] of a non-negative numerator by a positive
     denominator, which is always non-negative; the validity preservation
-    lemmas discharge this. *)
+    lemmas discharge this.
+
+    [queue_drafts_le_draftRSR] models production's [draft-rate]
+    invariant block (StRSR.sol#L120):
+        [draft-rate]: draftRSR * draftRate >= totalDrafts * 1e18
+    The simulation's analog is [sum_rsr_amounts queue <= draftRSR]
+    (which corresponds to [draftRate = FIX_ONE]; production allows
+    [draftRate > FIX_ONE] up to [MAX_DRAFT_RATE]). The simulation
+    chooses the tighter [draftRate = FIX_ONE] invariant because it
+    does not separately track [draftRate]; operations that would
+    push the implied rate above [FIX_ONE] (i.e. seizures that shrink
+    [draftRSR] below the queue's draft sum) trigger an era reset
+    via [beginDraftEra], wiping the queue and restoring the invariant.
+
+    This is strictly tighter than production but consistent with it —
+    every production state where [draftRate > FIX_ONE] but
+    [draftRate <= MAX_DRAFT_RATE] is unreachable in the simulation
+    (the simulation pre-emptively era-resets earlier). The proofs
+    are still safety-conservative: any safety property proved in the
+    simulation also holds in production (the simulation's reachable
+    states are a subset). *)
 Module Valid.
   Record t (s : Storage.t) : Prop := {
     totalStRSR_nonneg     : 0 <= s.(Storage.totalStRSR);

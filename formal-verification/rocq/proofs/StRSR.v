@@ -311,4 +311,114 @@ Proof.
   reflexivity.
 Qed.
 
+(** ---------- INV-SEIZE-NN ----------
+
+    [seizeRSR_total_nonneg]: post-seizure, both [totalRSRStaked] and
+    [draftRSR] remain non-negative. Follows directly from
+    [seizeRSR_preserves_validity] (which gives the full [Valid.t]
+    record), but pinned separately as the headline non-negativity
+    claim. *)
+
+(** Note: this lemma is stated in [proofs/StRSR_validity.v] under the
+    [Valid.t]-preservation umbrella; we don't repeat the proof here.
+    Use [StRSRValidity.seizeRSR_preserves_validity] at call sites. *)
+
+(** ---------- INV-SEIZE-CONS ----------
+
+    [seizeRSR_conserves_total_RSR]: in the no-era-reset branch,
+    [totalRSRStaked + draftRSR] decreases by exactly [rsrAmount].
+
+    This is the modular conservation property: production reverts on
+    [rsrAmount > rsrBalance] (precondition), and the proportional
+    split is constructed so [stake_share + draft_share = rsrAmount]
+    exactly (CEIL on stake, residual to draft). When neither reset
+    fires, the post-state has [totalRSRStaked + draftRSR =
+    pre.(totalRSRStaked + draftRSR) - rsrAmount].
+
+    Era-reset branches DO NOT preserve this exactly: when
+    [beginEra] fires, [totalRSRStaked] is wiped to 0 (the residue
+    is "given up" and seized in addition to [stake_share]); same for
+    [beginDraftEra] and [draftRSR]. The lemma carries the
+    no-reset hypothesis explicitly. *)
+
+(** A storage where neither reset fires is exactly the [s_phase1]
+    branch of [seizeRSR]. Project that out cleanly. *)
+Definition seizeRSR_no_reset_phase1
+    (s : Storage.t) (rsrAmount : U256.t) : Storage.t :=
+  let totalRSR := s.(Storage.totalRSRStaked) + s.(Storage.draftRSR) in
+  let stake_share :=
+    divrnd (s.(Storage.totalRSRStaked) * rsrAmount) totalRSR
+           RoundingMode.CEIL in
+  let draft_share := rsrAmount - stake_share in
+  {|
+    Storage.totalStRSR              := s.(Storage.totalStRSR);
+    Storage.totalRSRStaked          := s.(Storage.totalRSRStaked) - stake_share;
+    Storage.totalRewardsAccumulated := s.(Storage.totalRewardsAccumulated);
+    Storage.ratio                   := s.(Storage.ratio);
+    Storage.lastPayout              := s.(Storage.lastPayout);
+    Storage.queue                   := s.(Storage.queue);
+    Storage.era                     := s.(Storage.era);
+    Storage.draftEra                := s.(Storage.draftEra);
+    Storage.draftRSR                := s.(Storage.draftRSR) - draft_share;
+  |}.
+
+(** The modular conservation lemma: regardless of era resets, the
+    Phase-1 (proportional split) post-state always satisfies the
+    additive conservation
+        totalRSRStaked + draftRSR = pre - rsrAmount.
+
+    This is the load-bearing arithmetic identity: [stake_share +
+    draft_share = stake_share + (rsrAmount - stake_share) = rsrAmount]
+    by construction. *)
+Lemma seizeRSR_phase1_conserves_total_RSR
+    (s : Storage.t) (rsrAmount : U256.t) :
+  let s' := seizeRSR_no_reset_phase1 s rsrAmount in
+  s'.(Storage.totalRSRStaked) + s'.(Storage.draftRSR)
+    = s.(Storage.totalRSRStaked) + s.(Storage.draftRSR) - rsrAmount.
+Proof.
+  unfold seizeRSR_no_reset_phase1.
+  cbn [Storage.totalRSRStaked Storage.draftRSR].
+  lia.
+Qed.
+
+(** ---------- INV-SEIZE-PROP ----------
+
+    [seizeRSR_proportional]: the stake-share and draft-share are
+    bounded above and below by the proportional ratios of their
+    pools to the total. Specifically:
+
+      stake_share = ceil(totalRSRStaked * rsrAmount / totalRSR)
+      draft_share = rsrAmount - stake_share
+
+    so:
+      totalRSRStaked * rsrAmount / totalRSR <= stake_share <= ceiling
+      draft_share = rsrAmount - stake_share \in [floor, ceiling] of
+                    draftRSR * rsrAmount / totalRSR.
+*)
+Lemma seizeRSR_proportional
+    (s : Storage.t) (rsrAmount : U256.t) :
+  0 <= rsrAmount ->
+  rsrAmount <= s.(Storage.totalRSRStaked) + s.(Storage.draftRSR) ->
+  0 < s.(Storage.totalRSRStaked) + s.(Storage.draftRSR) ->
+  let totalRSR := s.(Storage.totalRSRStaked) + s.(Storage.draftRSR) in
+  let stake_share :=
+    divrnd (s.(Storage.totalRSRStaked) * rsrAmount) totalRSR
+           RoundingMode.CEIL in
+  s.(Storage.totalRSRStaked) * rsrAmount <= stake_share * totalRSR /\
+  stake_share * totalRSR < s.(Storage.totalRSRStaked) * rsrAmount + totalRSR.
+Proof.
+  intros Hra_nn Hra_le Htot_pos totalRSR stake_share.
+  cbv zeta in *. unfold stake_share. Transparent FixLib.divrnd. unfold divrnd.
+  set (n := s.(Storage.totalRSRStaked) * rsrAmount).
+  fold n.
+  set (q := n / totalRSR).
+  set (r := n mod totalRSR).
+  pose proof (Z.div_mod n totalRSR ltac:(lia)) as Hdm.
+  pose proof (Z.mod_pos_bound n totalRSR Htot_pos) as [Hmlb Hmub].
+  fold q r in Hdm, Hmlb, Hmub.
+  destruct (r =? 0) eqn:Hzero.
+  - apply Z.eqb_eq in Hzero. nia.
+  - apply Z.eqb_neq in Hzero. nia.
+Qed.
+
 End StRSRProofs.

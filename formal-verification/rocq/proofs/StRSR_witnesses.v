@@ -40,6 +40,7 @@
 Require Import RocqOfSolidity.RocqOfSolidity.
 Require Import simulations.RocqOfSolidity.
 Require Import Reserve.simulations.Fixed.
+Require Reserve.proofs.StRSR.
 Require Import Reserve.simulations.StRSR.
 Require Import Coq.Lists.List.
 Import ListNotations.
@@ -322,5 +323,79 @@ Lemma W19_beginDraftEra_zeros_drafts :
   s.(Storage.draftEra) = cal_storage.(Storage.draftEra) + 1 /\
   s.(Storage.totalStRSR) = cal_storage.(Storage.totalStRSR).
 Proof. vm_compute. repeat split; reflexivity. Qed.
+
+(** ===== seizeRSR witnesses ===== *)
+
+(** Calibration storage with both pools non-trivial: 100M qRSR staked
+    (1M qStRSR), 5M qRSR drafted (queue with 5M cumulative). *)
+Definition seize_init_storage : Storage.t := {|
+  Storage.totalStRSR              := cal_totalStakes;
+  Storage.totalRSRStaked          := cal_stakeRSR;
+  Storage.totalRewardsAccumulated := 0;
+  Storage.ratio                   := cal_ratio;
+  Storage.lastPayout              := 0;
+  Storage.queue                   := [{|
+    Withdrawal.rsrAmount   := 5 * 10^6 * FIX_ONE;
+    Withdrawal.availableAt := 1000;
+  |}];
+  Storage.era                     := 0;
+  Storage.draftEra                := 0;
+  Storage.draftRSR                := 5 * 10^6 * FIX_ONE;
+|}.
+
+(** ===== W20: seizeRSR with rsrAmount = 0 is identity (or trivial). =====
+    With totalRSR = 0 (empty state), seizeRSR returns s unchanged.
+    With totalRSR > 0 and rsrAmount = 0, both shares are 0; pools
+    unchanged but the draft_reset trigger fires when sum_rsr_amounts >
+    draftRSR_post = draftRSR (no, sum <= draftRSR holds, equality
+    only at saturation). On our calibration, sum = draftRSR = 5M *
+    FIX_ONE, so sum > draftRSR_post is false. Neither reset fires;
+    storage is unchanged. *)
+Lemma W20_seize_zero_amount :
+  seizeRSR seize_init_storage 0 = seize_init_storage.
+Proof. vm_compute. reflexivity. Qed.
+
+(** ===== W21: small seizure on stake-only state preserves validity. =====
+    With draftRSR = 0 (no drafts), seizing 1% of stakeRSR triggers a
+    draft-side era reset (draftRSR_post = 0 trivially fires the
+    trigger), but the stake pool keeps the proportional residue.
+    We verify the post-state has the expected structure. *)
+Lemma W21_seize_small_on_stake_only :
+  let s := seizeRSR cal_storage (cal_stakeRSR / 100) in
+  s.(Storage.totalRSRStaked) = cal_stakeRSR - cal_stakeRSR / 100 /\
+  s.(Storage.draftRSR) = 0 /\
+  s.(Storage.queue) = [] /\
+  s.(Storage.draftEra) = 1.
+Proof. vm_compute. repeat split; reflexivity. Qed.
+
+(** ===== W22: full seizure (rsrAmount = totalRSR) wipes both pools. =====
+    With rsrAmount = totalRSRStaked + draftRSR, both shares consume
+    their pools entirely; both era resets fire. *)
+Lemma W22_seize_full_drains_both :
+  let total := seize_init_storage.(Storage.totalRSRStaked) +
+               seize_init_storage.(Storage.draftRSR) in
+  let s := seizeRSR seize_init_storage total in
+  s.(Storage.totalRSRStaked) = 0 /\
+  s.(Storage.draftRSR) = 0 /\
+  s.(Storage.totalStRSR) = 0 /\
+  s.(Storage.era) = 1 /\
+  s.(Storage.draftEra) = 1.
+Proof. vm_compute. repeat split; reflexivity. Qed.
+
+(** ===== W23: seizeRSR conserves sum (Phase-1, no era reset case). =====
+    Pinned via [seizeRSR_phase1_conserves_total_RSR]. The Phase-1
+    decomposition (proportional-split before any era reset) always
+    drops the combined RSR by exactly [rsrAmount]. *)
+Lemma W23_seize_phase1_conservation :
+  let s' := Reserve.proofs.StRSR.StRSRProofs.seizeRSR_no_reset_phase1
+              seize_init_storage 1000 in
+  s'.(Storage.totalRSRStaked) + s'.(Storage.draftRSR)
+    = seize_init_storage.(Storage.totalRSRStaked)
+      + seize_init_storage.(Storage.draftRSR) - 1000.
+Proof.
+  pose proof (Reserve.proofs.StRSR.StRSRProofs.seizeRSR_phase1_conserves_total_RSR
+                seize_init_storage 1000) as H.
+  cbn zeta in H. exact H.
+Qed.
 
 End StRSRWitnesses.
