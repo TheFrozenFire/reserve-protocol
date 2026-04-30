@@ -27,6 +27,8 @@ scripts=(
   dutch_trade/bid_rounding.gp
   backing_manager/forward_revenue_conservation.gp
   backing_manager/backing_buffer_ceil_witness.gp
+  backing_manager/forward_revenue_iter.gp
+  backing_manager/recollateralization_state_machine.gp
   collateral/status_state_machine.gp
   collateral/ref_per_tok_monotonicity.gp
   gnosis_trade/min_buy_amount.gp
