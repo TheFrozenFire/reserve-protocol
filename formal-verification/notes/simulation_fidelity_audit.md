@@ -715,19 +715,77 @@ gates outside this sim are honoured.
 6. The `basketHistory` and `quoteCustomRedemption` 3.0.0 mechanism is entirely unmodeled. The sim's `redeem_one` is for the live basket only.
 7. The "disabled at init" semantic (sim's `empty_storage` has `disabled = true` matching production line 158) is faithful, but the `init()` function itself isn't modeled — the sim operates on arbitrary `Storage.t` values, including states production's `init` would never produce.
 
-## DutchTrade
+## DutchTrade (gold-standard audit)
 
-**Price-decay curve.** Models all four phases of `_price`,
-`bidAmount_at_price`, `bidAmount`, `bidAmount_floor_variant` (for
-rounding-direction comparisons). Storage = `Auction { startTime, endTime,
-bestPrice, worstPrice, sellAmount, buyDecimals }`.
+The simulation captures **the four-phase price-decay curve `_price`
+(geometric, two linear segments, flat), `_bidAmount`, the FLOOR-rounded
+variant `bidAmount_floor_variant` for rounding-direction proofs, and a
+storage record `{startTime, endTime, bestPrice, worstPrice, sellAmount,
+buyDecimals}` matching the production immutable-after-init slots**. It
+omits **the `TradeStatus` state machine (NOT_STARTED → OPEN → PENDING
+→ CLOSED), the `BidType` (NONE / TRANSFER / CALLBACK / FILL)
+classification, the trusted-filler subsystem (`activeTrustedFill`,
+`savedFillPrice`, `createTrustedFill`), the `bid()` / `bidWithCallback()`
+/ `settle()` / `transferToOriginAfterTradeComplete()` operations, the
+`init()` lifecycle and price-validation requires, the `lot()` view, the
+`canSettle()` gate, the broker / origin pointers, and the
+`reportViolation` invariant**. The proofs against this model are
+correct for the price/amount math; transferring them to production
+requires the auction is in OPEN state and `t ∈ [startTime, endTime]`
+(the sim's totalisation by clamping at endpoints does not match
+production's revert).
 
-**Gaps**:
-- Out-of-range `t` returns the nearest endpoint instead of reverting
-  (header acknowledges; treats the function as total).
-- The auction lifecycle (init, bid, settle, claim) is not modeled at
-  the state-transition level. Only the price/amount math.
-- `bid()`'s side effects (token transfer, status update) not modeled.
+### State omitted
+
+| Production state | Purpose | Simulation analog |
+|---|---|---|
+| `KIND` (constant `TradeKind.DUTCH_AUCTION`) | Identifies auction kind | None. |
+| `bidType` (BidType enum) | NONE / TRANSFER / CALLBACK / FILL — the bid mechanism used | None. |
+| `status` (TradeStatus) | State machine: NOT_STARTED / OPEN / PENDING / CLOSED — also reentrancy guard | None. |
+| `broker` (IBroker) | Cloning factory; `reportViolation()` callback | None. |
+| `origin` (ITrading) | The originating trader (BackingManager or RevenueTrader) | None. |
+| `sell`, `buy` (IERC20Metadata) | Token pointers for the auction pair | None. |
+| `sellAmount` (uint192) | Lot size in {sellTok} (D18) | **`Auction.sellAmount` ✓**. |
+| `startTime`, `endTime` (uint48) | Auction window | **`Auction.startTime`, `Auction.endTime` ✓** with `Valid.t` carrying uint48 bounds. |
+| `bestPrice`, `worstPrice` (uint192) | Auction price corners (D18) | **`Auction.bestPrice`, `Auction.worstPrice` ✓**. |
+| `bidder` (address) | Set on `bid()` to record the winning bidder | None. |
+| `activeTrustedFill` (IBaseTrustedFiller), `savedFillPrice` (uint192) | Trusted-filler subsystem (3.4.0+) | None. |
+| `buyDecimals` (read on demand from `buy.decimals()`) | Decimals of the buy token, for shiftl_toUint | **`Auction.buyDecimals` ✓** as input — sim accepts the value directly rather than reading from `buy.decimals()`. |
+
+### Operations omitted
+
+| Production function | Effect | Modeled? |
+|---|---|---|
+| `init(ITrading origin_, IAsset sell_, IAsset buy_, uint256 sellAmount_, uint48 auctionLength, TradePrices prices)` (line 171) — state-locked | Validates prices, sells funded, sets timing + price corners; status: NOT_STARTED → OPEN | **No.** Sim treats `Auction.t` as already-initialized. |
+| `bid()` (line 223) — closeTrustedFiller modifier | At current price, transfers buy from bidder, sets bidder, calls `origin.settleTrade(sell)`, reportViolation if cleared in geometric phase | **No.** Side effects (token transfer, status mutation) unmodeled. |
+| `bidWithCallback(bytes data)` (line 259) | Callback variant of bid() | **No.** |
+| `bidAmount(uint48 timestamp)` external view (line 154) | Public wrapper around `_bidAmount(_price(timestamp))` | **`bidAmount` ✓** in the sim. |
+| `lot()` view (line 147) | `sellAmount.shiftl_toUint(int8(sell.decimals()))` — qSellTok size of the lot | **No.** |
+| `createTrustedFill(address targetFiller, bytes32 deploymentSalt)` (line 303) | Sets up a trusted filler for the auction | **No.** |
+| `settle()` (line 342) — state-locked, closeTrustedFiller, origin-only | Settles the trade: handles BidType.FILL by checking buy balance, transfers tokens to origin/bidder; status: OPEN → CLOSED | **No.** |
+| `transferToOriginAfterTradeComplete(IERC20Metadata)` (line 381) | Escape hatch: post-CLOSED, transfer any erc20 to origin | **No.** |
+| `canSettle()` view (line 388) | Returns true iff settle would succeed (status == OPEN, not in active-fill, after endTime or filled or bidder set) | **No.** |
+| `_price(uint48 timestamp)` private view (line 421) | The four-phase curve; reverts if timestamp outside `[startTime, endTime]` | **`bidPrice` ✓** at the math level; the **out-of-range revert is replaced with clamping at the nearest endpoint** (header documents this divergence). |
+| `_bidAmount(uint192 price)` view (line 472) | `sellAmount.mul(price, CEIL).shiftl_toUint(int8(buy.decimals()), CEIL)` | **`bidAmount_at_price` ✓** with the shift modeled inline (sim line 130–136). |
+| `_closeTrustedFill()` private (line 478) | Tears down `activeTrustedFill` if non-zero | **No.** |
+
+### What the simulation *does* faithfully model
+
+- The four-phase dispatch in `_price`: phase1 (`progression < 20%`, geometric decay via `bestPrice * 1.5 / BASE^k`, CEIL), phase2 (`< 45%`, linear from 1.5×best down to best, FLOOR), phase3 (`< 95%`, linear from best down to worst, FLOOR), phase4 (constant at worst). Constants `MAX_EXP = 6502287e18`, `BASE_DEC = 999999e12`, `ONE_POINT_FIVE = 150e16` mirror production exactly.
+- `progression(a, t) = (t - startTime) * FIX_ONE / (endTime - startTime)` — note: production uses `divuu` (line 433) which the sim simplifies to integer division (FLOOR). Equivalent algebraically; the sim doesn't model `divuu`'s overflow guards explicitly.
+- `bidAmount_at_price`: the `mul(sellAmount, price, CEIL)` followed by `shiftl_toUint(buy.decimals(), CEIL)` decimal lift. Both rounding stages CEIL — bidder-favorable.
+- `bidAmount_floor_variant`: same composition with FLOOR everywhere, used to witness `bidAmount >= floor_variant` in CAS xchecks (cas/dutch_trade/).
+- `Valid.t` carries: `startTime < endTime`, `worstPrice <= bestPrice`, `0 < bestPrice`, `0 <= worstPrice`, `0 <= sellAmount`, `0 <= buyDecimals <= 36`, plus uint48 bounds on startTime / endTime added in the audit follow-up.
+
+### Implications for proof transferability
+
+1. The most surprising divergence: out-of-range `t` returns the nearest endpoint instead of reverting. Lemmas about `bidPrice` are *stronger* than the production function — they cover inputs production rejects via the `require(timestamp >= _startTime, ...)` / `require(timestamp <= _endTime, ...)` checks at production lines 424–425. Cross-cutting finding 1 records this; transferability of `bidPrice` lemmas requires a `Valid.in_range` precondition at integration sites.
+2. The state machine (NOT_STARTED → OPEN → PENDING → CLOSED) is entirely unmodeled. Lemmas about `bidPrice` apply *whether or not the auction is OPEN* — production's `bid()` has `require(status == TradeStatus.OPEN)` at line 225, which the sim cannot witness.
+3. The `BidType.FILL` branch and the trusted-filler subsystem (which can pre-fill the trade at a saved price) are unmodeled. Settlement-time math involving `_bidAmount(savedFillPrice)` and the buy-balance check at production line 353 has no sim coverage.
+4. The "geometric phase clears trigger reportViolation" invariant (production lines 238–240, 356–358) is unmodeled — sim has no Broker pointer.
+5. `init()`'s price-validation requires (`prices.sellLow != 0 && prices.sellHigh != 0 && prices.sellHigh < FIX_MAX / 1000` at line 187, similar for buy at line 191) are unmodeled. The sim's `Valid.t` enforces `0 < bestPrice`, which is weaker — production caps the upstream-derived bestPrice/worstPrice via the FIX_MAX/1000 constraint, the sim allows up to FIX_MAX.
+6. The `init()` derivation `worstPrice = sellLow.mulDiv(FIX_ONE - maxTradeSlippage, buyHigh, FLOOR)` and `bestPrice = sellHigh.div(buyLow, CEIL)` (production lines 209–214) is unmodeled. Lemmas about `bidPrice` apply to *any* `(bestPrice, worstPrice)` satisfying `Valid.t`, not specifically those production's init produces.
+7. The CAS xchecks (`cas/dutch_trade/`) sample the price curve at concrete timestamps and pin specific output values — they pair with the simulation lemmas to give a faithful coverage on the math, even where the lifecycle is unmodeled.
 
 ## GnosisTrade
 
