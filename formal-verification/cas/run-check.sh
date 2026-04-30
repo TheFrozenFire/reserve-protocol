@@ -20,6 +20,7 @@ scripts=(
   strsr/withdrawal_queue.gp
   strsr/cancel_unstake.gp
   strsr/seize_rsr.gp
+  strsr/draft_rate_evolution.gp
   furnace/melt_curve.gp
   distributor/share_conservation.gp
   trade_lib/slippage_sufficiency.gp
