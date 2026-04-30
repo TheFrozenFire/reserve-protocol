@@ -198,18 +198,56 @@ CAS witness coverage:
 - `cas/strsr/cancel_unstake.gp` (Phase B)
 - `cas/strsr/seize_rsr.gp` (Phase C)
 
-## Throttle
+## Throttle (gold-standard audit)
 
-**Faithful match.** All three production functions modeled (`hourlyLimit`,
-`currentlyAvailable`, `useAvailable`). Storage shape and edge-case
-behavior match production exactly. `Valid.t` carries tight bounds (uint48
-on lastTimestamp, uint192 on pctRate). Two-constructor `Result.t` for
-revert-bearing returns. Governance setters not modeled — params are in
-storage so a mutated struct can be passed between calls, but no
-`setParams` operation exists in the sim.
+The simulation captures **the full math kernel and storage shape of
+the throttle library — `hourlyLimit`, `currentlyAvailable`,
+`useAvailable` — including the revert-bearing `useAvailable` path
+when usage exceeds available**. It omits **the integration surface
+with `RTokenP1` (which holds the actual storage and provides
+governance-mutated params via constructor / `setIssuanceThrottleParams`
+/ `setRedemptionThrottleParams`)**. The proofs against this model are
+correct for the model; because the library is purely a state-mutator
+on a struct passed by reference, transferability hinges on the caller
+(`RTokenP1`) treating the throttle struct atomically — the simulation
+cannot witness any caller-side races between `hourlyLimit` reads and
+`useAvailable` writes.
 
-**Gaps**: governance setter operations, the integration with `RTokenP1`
-(which does the actual storage write).
+### State omitted
+
+| Production state | Purpose | Simulation analog |
+|---|---|---|
+| `Throttle.params.amtRate` (uint256) | Hourly token-amount cap | **`Throttle.params.amtRate` ✓** (carried as `U256.t`). |
+| `Throttle.params.pctRate` (uint192) | Hourly fraction-of-supply cap | **`Throttle.params.pctRate` ✓** with explicit uint192 bound in `Valid.params`. |
+| `Throttle.lastTimestamp` (uint48) | Cache: timestamp of last successful update | **`Throttle.lastTimestamp` ✓** with `Valid.throttle.lastTs_uint48`. |
+| `Throttle.lastAvailable` (uint256) | Cache: amount available at `lastTimestamp` | **`Throttle.lastAvailable` ✓**. |
+| Caller's `block.timestamp` | EVM-supplied "now" | Passed in as explicit `now : U256.t` argument. Not stored. |
+| Caller's `supply` | Total RToken supply at the call | Passed in as explicit `supply : U256.t` argument. Not stored. |
+
+### Operations omitted
+
+| Production function | Effect | Modeled? |
+|---|---|---|
+| `useAvailable(throttle, supply, amount)` | Storage-mutating consume / restore with revert when over the cap | **`useAvailable` ✓** — total function returning `Result.t Throttle.t`. |
+| `currentlyAvailable(throttle, limit)` | View: clipped lazily-accrued available | **`currentlyAvailable` ✓** — pure on `(t, limit, now)`. |
+| `hourlyLimit(throttle, supply)` | View: `max(amtRate, supply * pctRate / FIX_ONE)` | **`hourlyLimit` ✓** — pure on `(t, supply)`. |
+| Caller-side `setIssuanceThrottleParams(Params)` / `setRedemptionThrottleParams(Params)` (lives in `RTokenP1`, not in the library) | Governance write of `params`; production calls `useAvailable(0)` first to settle accrual | **No.** The library has no setter — `params` is treated as storage that may be updated externally, but no operation models the settle-then-write composition. |
+
+### What the simulation *does* faithfully model
+
+- The full `useAvailable` control flow including the early-exit when both rate caps are zero (production line 43; sim line 94).
+- The timestamp-update predicate (`available != lastAvailable || available == limit`) — the LHS of the bookkeeping decision at production line 52.
+- The signed-`amount` semantics: `amount > 0` consume (revert iff over cap), `amount < 0` restore (uncapped, lazy clip on next call), `amount = 0` no-op — header documents the convention.
+- The clip-at-limit invariant inside `currentlyAvailable` (the `Z.min limit raw` at sim line 87 mirrors the production `if (available > limit) available = limit` at line 76).
+- Two-constructor `Result.t` so a future Yul-equivalence proof can pin revert offsets at the boundary.
+- Tight `Valid.t` bounds on `lastTimestamp` (uint48), `pctRate` (uint192).
+
+### Implications for proof transferability
+
+1. Lemmas about `useAvailable` (e.g. `useAvailable_preserves_validity`) carry to the production library directly, modulo two preservation-of-context assumptions: (i) the caller always serializes `hourlyLimit` and `useAvailable` within the same transaction (true in `RTokenP1::issue` / `redeem`) and (ii) governance does not race a `setParams` between the `hourlyLimit` read and the `useAvailable` write within a single transaction.
+2. Because the simulation has no `setParams`, the proof tree cannot witness a "settle accrued usage at the old rate before applying the new rate" composition theorem analogous to Furnace's `setRatio_with_melt`. If the production caller violates that pattern, the simulation cannot detect it.
+3. The "untestable" branch at production line 43 (both rates zero) is an *explicit* branch in the sim, not a no-op-by-vacuity — proofs that case-split on it remain valid even when governance hard-codes positive rates.
+4. Coverage claims on Throttle should read "library-internal math + struct invariants", not "throttle subsystem end-to-end".
 
 ## Fixed
 
