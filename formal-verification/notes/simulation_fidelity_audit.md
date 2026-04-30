@@ -249,17 +249,80 @@ cannot witness any caller-side races between `hourlyLimit` reads and
 3. The "untestable" branch at production line 43 (both rates zero) is an *explicit* branch in the sim, not a no-op-by-vacuity — proofs that case-split on it remain valid even when governance hard-codes positive rates.
 4. Coverage claims on Throttle should read "library-internal math + struct invariants", not "throttle subsystem end-to-end".
 
-## Fixed
+## Fixed (gold-standard audit)
 
-**The math kernel.** Models `RoundingMode`, `_divrnd`, `mul`, `div`,
-`mulu`, `plus`, `minus`, comparisons, `powu`, `shiftl`. Both unchecked
-(Z-only) and `_opt` (`safeWrap`-checked) variants. `_safeWrap` returns
-`None` on overflow, matching production's `_safeWrap` revert.
+The simulation captures **the rounding-aware integer-division kernel
+(`divrnd`), the core arithmetic surface (`mul`, `div`, `mulu`, `plus`,
+`minus`, comparisons), `powu` exponentiation-by-squaring, and base-10
+`shiftl`** — both as unchecked Z-arithmetic and as `_opt`-suffixed
+variants returning `option Z` on uint192 overflow. It omits **the
+"safe" overflow-guarding family (`safeMul`, `safeDiv`, `safeMulDiv`),
+the precision-preserving 256-bit multiplication (`mulDiv256`,
+`fullMul`), the convenience surface (`toUint`, `toFix`, `near`,
+`fixMin`/`fixMax`), and the rare-use kernels (`sqrt`, `sqrt256`,
+`divFix`, `divuu`)**. Proofs against this kernel are correct for the
+modeled subset; lemmas about products that flow through `safeMulDiv`
+or `mulDiv256` in production must be re-derived from the unchecked
+`mul`/`div` (over Z) plus a separate boundedness-preservation
+argument — the simulation does not give them for free.
 
-**Out of scope (per simulation header)**: `sqrt`, `divFix`, `divuu`, the
-full chained-operation surface (e.g. `mulu_toUint` is partial, `mulDiv256`
-not modeled). Most CAS xchecks pin specific values, so faithfulness is
-sampled even when not formally proved.
+### State omitted
+
+| Production state | Purpose | Simulation analog |
+|---|---|---|
+| (none — Fixed.sol is a stateless library) | n/a | n/a |
+
+### Operations omitted
+
+| Production function | Effect | Modeled? |
+|---|---|---|
+| `_safeWrap(uint256) -> uint192` (file-level helper, line 73) | Reverts if `x > FIX_MAX`, else identity | **Modeled as `safeWrap : Z -> option Z`** returning `None` on overflow. |
+| `_divrnd(numerator, divisor, rounding) -> uint256` (line 155) | Rounding-mode-aware integer div | **`divrnd` ✓**. |
+| `toFix(uint256) -> uint192` (line 81) | Multiply by `FIX_SCALE`, revert on overflow | **No.** |
+| `shiftl_toFix(uint256, int8) -> uint192` (line 89; FLOOR-default and rounding overloads, lines 89/95) | Decimal-shift ints to fix | **No** — `shiftl_toUint` is also not modeled (the inverse direction at line 380/387 is not modeled either; only `shiftl` for fix-to-fix is). |
+| `divFix(uint256, uint192) -> uint192` (line 117) | Divide a uint by a fix, return fix | **No** (header explicitly defers this). |
+| `divuu(uint256, uint256) -> uint192` (line 130) | uint/uint to fix; used inside DutchTrade `_price`'s `progression` | **No** (header defers; DutchTrade simulation reimplements the formula directly). |
+| `fixMin`, `fixMax` (lines 136, 142) | Min/max of two uint192 | **No.** Callers use `Z.min` / `Z.max` ad hoc. |
+| `abs(int256) -> uint256` (line 148) | Absolute value | **No.** |
+| `FixLib.toUint(uint192) -> uint136` (line 183, 190 with rounding) | Strip fixed-point scale, return integer | **No.** |
+| `FixLib.shiftl(uint192, int8) -> uint192` (line 198) | FLOOR-default decimal shift | **No** — only the rounding-mode variant at line 206 is modeled (sim's `shiftl`). |
+| `FixLib.shiftl(uint192, int8, RoundingMode) -> uint192` (line 206) | Decimal shift with rounding mode | **`shiftl` ✓**. Includes the `decimals <= -59` saturation at sim line 174 and `decimals >= 58` revert (returns `None`) at sim line 176. |
+| `FixLib.plus`, `plusu`, `minus`, `minusu` (lines 223, 230, 237, 244) | uint192 add/sub with overflow revert | **`plus`, `plus_opt`, `minus`, `minus_opt` ✓** (no `plusu`/`minusu` — sim works in Z and uses `*_opt` to surface uint192 boundary). |
+| `FixLib.mul(uint192, uint192) -> uint192` and rounding variant (lines 252, 259) | uint192 mul with rounding | **`mul`, `mul_opt` ✓** (CEIL/ROUND/FLOOR via `RoundingMode`). |
+| `FixLib.mulu(uint192, uint256) -> uint192` (line 270) | mix-precision multiply | **`mulu`, `mulu_opt` ✓**. |
+| `FixLib.div(uint192, uint192) -> uint192` and rounding variant (lines 277, 284) | uint192 div with rounding | **`div`, `div_opt` ✓**. |
+| `FixLib.divu(uint192, uint256) -> uint192` and rounding variant (lines 296, 303) | mix-precision divide | **No.** Used inside Throttle's `currentlyAvailable` and DutchTrade indirectly; both reimplement the formula. |
+| `FixLib.powu(uint192, uint48) -> uint192` (line 317) | Exp-by-squaring on D18 | **`powu` ✓**. The conditional ordering is rearranged from production for `simpl` reducibility (sim line 152 comment); production-equivalence relies on `powu_safe`-style lemmas in `proofs/Fixed_safety.v`. |
+| `FixLib.sqrt(uint192) -> uint192` (line 332) | Newton-iteration sqrt on D18 | **No.** |
+| `FixLib.lt`, `lte`, `gt`, `gte`, `eq`, `neq` (lines 337–357) | Comparisons | **`lt`, `lte`, `gt`, `gte`, `eq`, `neq` ✓**. |
+| `FixLib.near(uint192, uint192, uint192) -> bool` (line 364) | Approximate equality | **No.** |
+| `FixLib.shiftl_toUint(uint192, int8)` and rounding variant (lines 380, 387) | Strip scale and decimal-shift to integer | **No.** Callers (BackingManager, BasketHandler, GnosisTrade, DutchTrade) reimplement the formula. |
+| `FixLib.mulu_toUint(uint192, uint256)` and rounding variant (lines 406, 413) | Multiply, then strip scale, returning integer | **`mulu_toUint` ✓** (rounding variant only). The header notes the FLOOR-default overload is not modeled. |
+| `FixLib.mul_toUint(uint192, uint192)` and rounding variant (lines 424, 431) | Multiply two fixes and strip scale | **No.** |
+| `FixLib.muluDivu` (lines 443, 455) | a * b / c on (uint192, uint256, uint256) | **No.** |
+| `FixLib.mulDiv` (lines 468, 480) | a * b / c on (uint192, uint192, uint192) with rounding | **No** — the safety-guarded variant at line 562 is what TradeLib uses, and the simulation models that piece in `simulations/TradeLib.v` directly. |
+| `FixLib.safeMul(uint192, uint192, RoundingMode) -> uint192` (line 494) | Saturating multiply (returns FIX_MAX on overflow) | **No.** |
+| `FixLib.safeDiv(uint192, uint192, RoundingMode) -> uint192` (line 544) | Saturating divide | **No** — modeled in `simulations/IssuancePremium.v::safeDiv_ceil` for the CEIL specialization only. |
+| `FixLib.safeMulDiv(uint192, uint192, uint192, RoundingMode) -> uint192` (line 562) | Saturating mul-div, used by TradeLib | **No** at the FixLib level — `simulations/TradeLib.v::safeMulDiv` carries a separate model for the kernel TradeLib actually invokes. |
+| `mulDiv256(uint256, uint256, uint256)` (line 622) and rounding variant (line 653) | Full-precision 256-bit mul-div using Newton iteration; the inner kernel of `safeMulDiv` | **No.** Header notes the inner uint256 overflow is not separately bounded. |
+| `fullMul(uint256, uint256) -> (hi, lo)` (line 677) | 512-bit multiply primitive | **No.** |
+| `sqrt256(uint256) -> uint256` (line 697) | Newton-iteration sqrt | **No.** |
+
+### What the simulation *does* faithfully model
+
+- The full `RoundingMode` enum and `divrnd` semantics (FLOOR / ROUND / CEIL).
+- `safeWrap : Z -> option Z` matching production's `_safeWrap` revert, surfaced via `_opt` wrappers.
+- The seven core arithmetic operations (`mul`, `div`, `mulu`, `plus`, `minus`, comparisons) in both unchecked-Z and uint192-bounded variants.
+- `powu` with the same conditional structure as production lines 317-330, using a `Z.log2 y + 1` fuel parameter (since `y` is uint48-bounded, this terminates).
+- `shiftl` including all three documented edge cases: `x = 0`, `decimals <= -59` (saturation per rounding mode), `decimals >= 58` (overflow → `None`).
+- `mulu_toUint` (the rounding variant) — the only "result-as-uint" function modeled.
+
+### Implications for proof transferability
+
+1. Lemmas using only `mul`, `div`, `mulu`, `plus`, `minus`, `powu`, and `shiftl` carry to production directly (modulo uint192 boundedness, which is the responsibility of `_opt` callers).
+2. Lemmas about `safeMulDiv` or `safeDiv` rely on the **per-callsite** simulations in `TradeLib.v` and `IssuancePremium.v`. The fact that production routes these through `mulDiv256` (a Newton-iteration full-precision kernel) is *not* modeled — proofs that depend on intermediate-precision properties (e.g. that `safeMulDiv` produces a result equal to `(a*b/c)` even when `a*b > 2^256`) carry only by manual argument, not by the sim.
+3. Any production callsite that uses `safeMul`, `safeDiv`, `near`, `divu`, `mulDiv`, or `muluDivu` outside of TradeLib / IssuancePremium has **no Fixed-side simulation coverage** — proofs must reason about those callsites either by re-deriving the operation in `Z` or by reading the operation's effect from the call's surrounding context. The CAS xchecks (`cas/fixlib/`) pin some specific values but are not exhaustive.
+4. The conditional rearrangement in `powu` (sim line 152 comment) means the sim's `powu` is provably equal to production's only via the `powu_safe` lemma chain in `proofs/Fixed_safety.v` — direct definitional equality does not hold.
 
 ## Furnace
 
