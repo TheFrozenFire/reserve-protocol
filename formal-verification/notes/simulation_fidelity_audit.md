@@ -931,13 +931,52 @@ already discharged the oracle boundary.
 6. Subclass-specific overrides (e.g. CTokenFiatCollateral's `refPerTok` override that reads from Compound's exchange rate) are entirely unmodeled. The sim captures the base FiatCollateral + AppreciatingFiatCollateral; for any concrete plugin, additional verification is needed to confirm the override preserves the `Valid.t` invariants.
 7. The `revenueShowing` immutability assumption in the sim is faithful for AppreciatingFiatCollateral (production has it `immutable`, line 33). Some non-AppreciatingFiatCollateral subclasses may read revenueShowing from elsewhere — header notes this should be checked per-plugin.
 
-## IssuancePremium
+## IssuancePremium (gold-standard audit)
 
-**Pure function.** Models the production `issuancePremium` formula and
-the underlying `safeDiv_ceil`. All edge cases handled.
+The simulation captures **the full `issuancePremium` formula from
+BasketHandler.sol::issuancePremium (production line 371–387) and the
+underlying CEIL-rounded `safeDiv` kernel (FixLib line 544)**. It omits
+**the `lastSave()` and `savedPegPrice()` indirections through the
+ICollateral pointer (sim takes `lastSaveIsNow` and `pegPrice` as
+booleans/scalars), the `targetPerRef()` indirection (sim takes
+`targetPerRef` as a scalar), and the `try-catch` at production line
+376 that falls through to FIX_ONE when `savedPegPrice()` doesn't
+exist on a pre-4.0.0 collateral**. The proofs against this model are
+correct for the production formula; transferring them to production
+requires the caller has already discharged the indirection through
+ICollateral.
 
-**Faithful match.** This is the smallest and most thoroughly modeled
-simulation in the tree.
+### State omitted
+
+| Production state | Purpose | Simulation analog |
+|---|---|---|
+| `enableIssuancePremium` (BasketHandler storage) | Governance toggle for the entire premium feature | **Passed as `enable : bool`** input to `issuancePremium`. |
+| `coll.lastSave()` (Asset-inherited; uint48 timestamp) | When tryPrice was last successful — gates premium application | **Passed as `lastSaveIsNow : bool`** input — sim doesn't model the `coll.lastSave() != block.timestamp` comparison directly. |
+| `coll.savedPegPrice()` (FiatCollateral; uint192) | Cached pegPrice from last refresh | **Passed as `pegPrice : Z`** input. |
+| `coll.targetPerRef()` (FiatCollateral; uint192) | Target-per-ref calibration (FIX_ONE for fiat, oracle-derived elsewhere) | **Passed as `targetPerRef : Z`** input. |
+
+### Operations omitted
+
+| Production function | Effect | Modeled? |
+|---|---|---|
+| `BasketHandler.issuancePremium(ICollateral coll) -> uint192` (line 371) public view | Returns `FIX_ONE` if disabled, `coll.lastSave() != now`, `pegPrice == 0`, or `pegPrice >= targetPerRef`; otherwise `targetPerRef.safeDiv(pegPrice, CEIL)`. The `try ... catch` at line 376 catches missing `savedPegPrice()` on pre-4.0.0 collateral and returns `FIX_ONE` | **`issuancePremium` ✓** for the formula. The `try-catch` for missing `savedPegPrice()` is **unmodeled** — sim treats `pegPrice` as always available. |
+| `FixLib.safeDiv(uint192, uint192, RoundingMode) -> uint192` (Fixed.sol line 544) | Saturating divide: returns FIX_MAX on `b = 0` or overflow, 0 on `a = 0` | **`safeDiv_ceil` ✓** for the CEIL specialisation. |
+| `FixLib.div(uint192, uint192, RoundingMode)` (Fixed.sol line 284) | The non-saturating divide that `safeDiv` wraps | **`FixLib.div` ✓** in `Fixed.v`. |
+
+### What the simulation *does* faithfully model
+
+- The five-way cascade in `issuancePremium`: `!enable → FIX_ONE`, `!lastSaveIsNow → FIX_ONE`, `pegPrice == 0 → FIX_ONE`, `pegPrice >= targetPerRef → FIX_ONE`, else `safeDiv_ceil(targetPerRef, pegPrice)` (sim line 65–69 mirroring production line 373–382).
+- The `safeDiv_ceil` saturation: `a = 0 → 0`, `a = FIX_MAX → FIX_MAX`, `b = 0 → FIX_MAX`, else `div(a, b, CEIL)` clamped to FIX_MAX. This matches FixLib.safeDiv production semantics for the CEIL rounding mode.
+- `Valid.input(x) = 0 <= x <= FIX_MAX`: any uint192 input is acceptable; the output is always uint192 by construction (the explicit FIX_MAX clamp ensures this).
+- The post-condition that `issuancePremium >= FIX_ONE` always holds: every path either returns FIX_ONE directly or returns `safeDiv_ceil(targetPerRef, pegPrice)` which (since the path is gated by `pegPrice < targetPerRef`) produces a result `>= FIX_ONE`. This is the load-bearing premium-monotonicity invariant.
+
+### Implications for proof transferability
+
+1. The simulation is the most faithful in the tree. Lemmas about `issuancePremium` carry to production directly *iff* the caller has already (a) discharged the `try-catch` (i.e. the collateral is post-4.0.0 and exposes `savedPegPrice()`), (b) supplied the live `coll.lastSave()` comparison as `lastSaveIsNow`, and (c) supplied the live `coll.savedPegPrice()` and `coll.targetPerRef()` as scalars.
+2. The `try-catch` for missing `savedPegPrice()` (production line 376–386) is the only unmodeled production path. For pre-4.0.0 collateral plugins, production returns FIX_ONE; the sim cannot witness this fallback. Lemmas are valid only for post-4.0.0 collateral or those where `savedPegPrice()` is known to succeed.
+3. Live-vs-frozen for `enableIssuancePremium` is a cross-cutting finding 2 entry: production stores it; sim takes it as input. Lemmas don't cover the toggling sequence (governance flips it between calls).
+4. The `targetPerRef` indirection is a one-way arrow — the sim's `targetPerRef` is always whatever the caller supplies; production reads it from `coll.targetPerRef()`, which for non-fiat collateral may itself be oracle-derived. For fiat (`targetPerRef = FIX_ONE`), the proof transfer is straightforward; for non-fiat, the caller must supply the live oracle value.
+5. The CAS witness (`cas/issuance_premium/premium_curve.gp`) probes invariants P1..P6 on a 5-token stablecoin basket, providing concrete-value coverage that complements the simulation's symbolic lemmas.
 
 ---
 
