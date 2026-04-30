@@ -324,22 +324,59 @@ argument — the simulation does not give them for free.
 3. Any production callsite that uses `safeMul`, `safeDiv`, `near`, `divu`, `mulDiv`, or `muluDivu` outside of TradeLib / IssuancePremium has **no Fixed-side simulation coverage** — proofs must reason about those callsites either by re-deriving the operation in `Z` or by reading the operation's effect from the call's surrounding context. The CAS xchecks (`cas/fixlib/`) pin some specific values but are not exhaustive.
 4. The conditional rearrangement in `powu` (sim line 152 comment) means the sim's `powu` is provably equal to production's only via the `powu_safe` lemma chain in `proofs/Fixed_safety.v` — direct definitional equality does not hold.
 
-## Furnace
+## Furnace (gold-standard audit)
 
-**Mostly faithful.** `melt`, `setRatio`, MAX_RATIO. The integral form
-`payoutRatio = 1 - (1-ratio)^N` matches the documented
-`[furnace-payout-formula]` block in production. CAS xchecks pin specific
-values.
+The simulation captures **the per-period melt math (`(1 - (1-r)^N) *
+bal`), the storage-mutating `melt(now, currentBalance)` call, and both
+the divergent and production-faithful `setRatio` paths
+(`setRatio` writes directly; `setRatio_with_melt` calls `melt` at the
+old ratio first)**. It omits **the `init()` lifecycle, the actual
+`rToken.melt(amount)` token-burn side effect, the governance modifier
+on `setRatio`, and the `block.timestamp` / `rToken.balanceOf`
+indirection** (sim takes both as inputs, header documents this). The
+proofs against this model are correct for the math kernel; transfer
+to production requires (i) the caller passing the live
+`rToken.balanceOf(this)` rather than a stale snapshot, (ii) proofs
+that depend on the new-ratio-applies-to-next-period semantic to use
+`setRatio_with_melt`, not `setRatio`.
 
-**Gaps**:
-- `setRatio` does not call `melt` first (production line 85 does).
-  Composition `setRatio_then_*` may not match production semantics. See
-  cross-cutting finding 2.
-- `Valid.t` bound on `lastPayout` is loose (claims uint48 by name, holds
-  uint256). See cross-cutting finding 3.
-- `init` not modeled; `__gap` storage gap not represented.
-- The actual `rToken.melt(amount)` call at the end of production's `melt`
-  is not modeled (sim just decrements `lastPayoutBal`).
+### State omitted
+
+| Production state | Purpose | Simulation analog |
+|---|---|---|
+| `MAX_RATIO` (uint192 constant, 1e14) | Cap on per-period melt fraction | **`MAX_RATIO ✓`** as `Z` constant. |
+| `rToken` (IRToken private) | Pointer to the RToken contract; supplies `balanceOf(this)` and receives `melt(amount)` | None. The simulation accepts `currentBalance` as an explicit `now`-time argument. |
+| `ratio` (uint192) | The per-period melt fraction | **`Storage.ratio` ✓**. |
+| `lastPayout` (uint48) | Timestamp of last payout | **`Storage.lastPayout` ✓** but bounded as `0 <= ... <= UINT256_MAX` in `Valid.t` (the field name was renamed to `lastPayout_u256` per the audit follow-up; production type is uint48 and the loose bound is a known gap — see cross-cutting finding 3). |
+| `lastPayoutBal` (uint256) | Cached RToken balance at last payout | **`Storage.lastPayoutBal` ✓**. |
+| `__gap` (uint256[47]) | OZ upgrades reserved storage | None. |
+| `Component`-inherited storage (governance role, paused/frozen flags, etc.) | Auth and pause | None. |
+
+### Operations omitted
+
+| Production function | Effect | Modeled? |
+|---|---|---|
+| `init(IMain, uint192 ratio_)` | Sets `rToken`, calls `setRatio(ratio_)`, snapshots `lastPayout = now`, `lastPayoutBal = rToken.balanceOf(this)` | **No.** |
+| `melt()` (line 65) | Computes payout amount, updates `lastPayout`, `lastPayoutBal`, calls `rToken.melt(amount)` | **`melt` ✓** as `(s, now, currentBalance) -> (s', amount)`. The `rToken.melt(amount)` token-burn side effect is **not modeled** — sim just decrements `lastPayoutBal`. |
+| `setRatio(uint192 ratio_)` (line 83) — governance-gated | Reverts if `ratio_ > MAX_RATIO`; calls `melt()`; writes `ratio = ratio_`; emits `RatioSet` | **Two variants modeled:** (a) `setRatio` writes directly without calling melt — flagged as DIVERGENCE in the simulation header; (b) `setRatio_with_melt` matches production's call ordering. Governance modifier and the `RatioSet` event are not modeled. |
+| Component-inherited (`pause`, `freeze`, `requireGovernanceOnly`) | Pause/freeze guards on melt; governance gate on setRatio | **No.** |
+
+### What the simulation *does* faithfully model
+
+- The integral form `payoutRatio = 1 - (1-ratio)^N` (sim line 67–69 mirroring production line 72) — i.e. the closed-form sum of N geometric per-period melts.
+- The early-return `if (now < lastPayout + 1) return` short-circuit at sim line 63 / production line 66.
+- The `lastPayout += numPeriods` semantics (sim and production both add `numPeriods`, not "set to `now`" — relevant if `now > lastPayout + numPeriods` due to the `uint48` cast in production, which the sim doesn't model).
+- The `lastPayoutBal' = currentBalance - amount` semantic (sim line 74 / production line 77). This *omits* the post-melt balance change: production's `rToken.melt(amount)` call burns tokens *after* the assignment, so on the next call `currentBalance` will reflect the new balance — the sim's caller must supply that fresh balance.
+- The `setRatio_with_melt` composition (sim lines 105–116) which captures one period of accrual at the old ratio, then writes the new ratio.
+- `MAX_RATIO = 1e14` cap on `setRatio`.
+
+### Implications for proof transferability
+
+1. Lemmas about `melt` carry to production *if* the caller supplies the live `rToken.balanceOf(this)` as `currentBalance`. The sim cannot witness divergence between `currentBalance` and the post-burn balance from the previous melt — but production's `rToken.melt(amount)` happens at the end of the same call, so the next caller's read sees the post-burn balance, and the sim is faithful.
+2. The `setRatio_with_melt` operation makes the simulation *production-faithful for ordering*. The bare `setRatio` still exists for proofs that don't care about ordering (header line 79–87). A reviewer should check that no chain-level lemma uses `setRatio` where `setRatio_with_melt` would be called in production — see cross-cutting finding 2.
+3. Lemmas about token-burn conservation (e.g. "RToken total supply decreases by `amount` after `melt`") *cannot* be stated in this simulation because the `rToken.melt(amount)` call is not modeled. Such lemmas live downstream of the sim, in integration files that thread RToken's storage state through.
+4. The governance gate on `setRatio` is unmodeled: the simulation treats setRatio as available to any caller, with `MAX_RATIO` as the only cap. Production additionally requires `requireGovernanceOnly()` (production line 83 modifier) — the sim's lemmas hold for any caller that respects the cap, which is strictly weaker than production's reachability.
+5. The `init()` snapshot semantic ("lastPayout = now at init") is unmodeled. Lemmas that depend on the genesis state are vacuous on storage states the simulation regards as well-formed but production's `init` would never produce.
 
 ## Distributor
 
