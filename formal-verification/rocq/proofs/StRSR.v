@@ -188,6 +188,9 @@ Lemma payoutRewards_active
     Storage.lastPayout              := s.(Storage.lastPayout) +
                                        (now - s.(Storage.lastPayout));
     Storage.queue                   := s.(Storage.queue);
+    Storage.era                     := s.(Storage.era);
+    Storage.draftEra                := s.(Storage.draftEra);
+    Storage.draftRSR                := s.(Storage.draftRSR);
   |}.
 Proof.
   intros Hle. unfold payoutRewards.
@@ -232,6 +235,9 @@ Definition rt_genesis_storage : Storage.t := {|
   Storage.ratio                   := 0;
   Storage.lastPayout              := 0;
   Storage.queue                   := [];
+  Storage.era                     := 0;
+  Storage.draftEra                := 0;
+  Storage.draftRSR                := 0;
 |}.
 
 Lemma stake_genesis_eq (amount : U256.t) :
@@ -242,6 +248,9 @@ Lemma stake_genesis_eq (amount : U256.t) :
     Storage.ratio                   := 0;
     Storage.lastPayout              := 0;
     Storage.queue                   := [];
+    Storage.era                     := 0;
+    Storage.draftEra                := 0;
+    Storage.draftRSR                := 0;
   |}.
 Proof.
   unfold stake, rt_genesis_storage.
@@ -261,6 +270,9 @@ Lemma exchange_rate_balanced (X : Z) :
     Storage.ratio                   := 0;
     Storage.lastPayout              := 0;
     Storage.queue                   := [];
+    Storage.era                     := 0;
+    Storage.draftEra                := 0;
+    Storage.draftRSR                := 0;
   |} = FIX_ONE_Z.
 Proof.
   intros Hpos. unfold exchange_rate. cbn.

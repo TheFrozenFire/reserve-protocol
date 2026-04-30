@@ -46,6 +46,9 @@ Definition cal_storage : Storage.t := {|
   Storage.ratio                   := cal_ratio;
   Storage.lastPayout              := 0;
   Storage.queue                   := [];
+  Storage.era                     := 0;
+  Storage.draftEra                := 0;
+  Storage.draftRSR                := 0;
 |}.
 
 (** ---------- (1) Genesis stake mints 1:1 ---------- *)
@@ -57,6 +60,9 @@ Definition genesis_storage : Storage.t := {|
   Storage.ratio                   := cal_ratio;
   Storage.lastPayout              := 0;
   Storage.queue                   := [];
+  Storage.era                     := 0;
+  Storage.draftEra                := 0;
+  Storage.draftRSR                := 0;
 |}.
 
 (** Stake 1M RSR into genesis -> totalStRSR = 1M, totalRSRStaked = 1M.
@@ -90,6 +96,9 @@ Definition unstake_init_storage : Storage.t := {|
   Storage.ratio                   := cal_ratio;
   Storage.lastPayout              := 0;
   Storage.queue                   := [];
+  Storage.era                     := 0;
+  Storage.draftEra                := 0;
+  Storage.draftRSR                := 0;
 |}.
 
 (** CAS reports rsrMoved = 5_000_000_000_000_000_000_000_000 when
@@ -142,6 +151,9 @@ Definition cal_payout_storage : Storage.t := {|
   Storage.ratio                   := cal_ratio;
   Storage.lastPayout              := 0;
   Storage.queue                   := [];
+  Storage.era                     := 0;
+  Storage.draftEra                := 0;
+  Storage.draftRSR                := 0;
 |}.
 
 (** With [now = 10] and [lastPayout = 0], [numPeriods = 10].

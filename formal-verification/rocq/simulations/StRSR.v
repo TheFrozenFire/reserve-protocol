@@ -38,12 +38,14 @@
     [FixLib._safeWrap]; the simulation's invariant lemmas state the
     pure-Z properties).
 
-    Coverage scope: this simulation models aggregate stake/unstake math
-    and compound payout. It omits per-account balances, the era /
-    seizure / draft-rate model, the [withdraw] / [cancelUnstake] /
-    [seizeRSR] operations, the ERC20 surface, and the withdrawal-leak
-    mechanism. See [../../notes/simulation_fidelity_audit.md] for the
-    full divergence list and the proof-transferability implications.
+    Coverage scope: this simulation models aggregate stake/unstake math,
+    compound payout, the [withdraw] / [cancelUnstake_last] / [seizeRSR]
+    operations, and the seizure-driven era / draft-era reset model. It
+    omits per-account balances, the ERC20 surface, the withdrawal-leak
+    mechanism, governance-setter auth, and the basket-handler
+    [isReady] / [fullyCollateralized] gates. See
+    [../../notes/simulation_fidelity_audit.md] for the full divergence
+    list and the proof-transferability implications.
 
     Revert coverage:
       Modeled:  [payoutRewards] early-return when [now < lastPayout + 1]
@@ -52,13 +54,15 @@
       Deferred: [unstake]'s [amount <= totalStRSR] precondition is
                 carried by integration lemmas as a hypothesis; the
                 simulation does not check it. [Valid.t] holds the
-                non-negativity and ratio-band invariants.
-      Not modeled: the [withdraw]/[cancelUnstake] vesting-completion
-                paths (which check [availableAt <= now] and
-                [basketHandler.isReady() && fullyCollateralized()]),
-                era-reset triggers via [seizeRSR], withdrawal-leak
-                refresh requirements, ERC20 transfer reverts, governance
-                setter authentication.
+                non-negativity, ratio-band, and conservation
+                invariants. [seizeRSR]'s [rsrAmount <= totalRSRStaked
+                + draftRSR] precondition (production's
+                [SeizeExceedsBalance] revert) is similarly deferred to
+                an explicit hypothesis.
+      Not modeled: the [withdraw] / [cancelUnstake_last]
+                [basketHandler.isReady() && fullyCollateralized()]
+                gate, withdrawal-leak refresh requirements, ERC20
+                transfer reverts, governance setter authentication.
 *)
 
 Require Import RocqOfSolidity.RocqOfSolidity.
@@ -80,6 +84,23 @@ Definition FIX_ONE_Z : Z := FIX_ONE.
     governance-enforced range. *)
 Definition MAX_REWARD_RATIO : Z := 10^14.
 
+(** Production-side hard cap on the (inverted) stakeRate, per
+    StRSR.sol#L68:
+        MAX_STAKE_RATE = 1e9 * FIX_ONE  ({qStRSR/qRSR} D18)
+    Crossing this cap during [seizeRSR] triggers a stake-side era
+    reset ([beginEra]). The simulation does not separately track
+    [stakeRate] (we collapse to a single [exchange_rate] derived
+    from totals); the cap surfaces here purely as the proportional-
+    seizure trigger that empties the stake pool when the seized
+    fraction would otherwise leave a near-zero residue. *)
+Definition MAX_STAKE_RATE : Z := 10^9 * FIX_ONE.
+
+(** Production-side hard cap on [draftRate], per StRSR.sol#L90:
+        MAX_DRAFT_RATE = 1e9 * FIX_ONE  ({qDrafts/qRSR} D18)
+    Crossing this cap during [seizeRSR] triggers a draft-side era
+    reset ([beginDraftEra]). *)
+Definition MAX_DRAFT_RATE : Z := 10^9 * FIX_ONE.
+
 (** A single withdrawal entry in the queue. [rsrAmount] is the locked
     RSR principal computed at the unstake-time rate; [availableAt] is
     the unix timestamp at which the entry vests. *)
@@ -98,6 +119,9 @@ Module Storage.
     ratio                   : U256.t;   (** {1}, D18 — per-period payout ratio *)
     lastPayout              : U256.t;   (** {seconds} *)
     queue                   : list Withdrawal.t;
+    era                     : U256.t;   (** monotonically incremented by [beginEra] *)
+    draftEra                : U256.t;   (** monotonically incremented by [beginDraftEra] *)
+    draftRSR                : U256.t;   (** {qRSR} — RSR locked in the withdrawal queue *)
   }.
 End Storage.
 
@@ -141,6 +165,9 @@ Definition stake (s : Storage.t) (amount : U256.t) : Storage.t :=
       Storage.ratio                   := s.(Storage.ratio);
       Storage.lastPayout              := s.(Storage.lastPayout);
       Storage.queue                   := s.(Storage.queue);
+      Storage.era                     := s.(Storage.era);
+      Storage.draftEra                := s.(Storage.draftEra);
+      Storage.draftRSR                := s.(Storage.draftRSR);
     |}
   else
     let rate := exchange_rate s in
@@ -152,6 +179,9 @@ Definition stake (s : Storage.t) (amount : U256.t) : Storage.t :=
       Storage.ratio                   := s.(Storage.ratio);
       Storage.lastPayout              := s.(Storage.lastPayout);
       Storage.queue                   := s.(Storage.queue);
+      Storage.era                     := s.(Storage.era);
+      Storage.draftEra                := s.(Storage.draftEra);
+      Storage.draftRSR                := s.(Storage.draftRSR);
     |}.
 
 (** ---------- enqueue ----------
@@ -178,8 +208,9 @@ Fixpoint queue_fifo (q : list Withdrawal.t) : Prop :=
 (** ---------- unstake ----------
 
     Burns [amount] stRSR, computes the corresponding RSR principal at
-    the current rate, and pushes a withdrawal onto the queue with
-    [availableAt = now + delay].
+    the current rate, moves that RSR from the active stake pool
+    [totalRSRStaked] into the draft pool [draftRSR], and pushes a
+    withdrawal entry recording the amount and the unlock timestamp.
 
     Pre: [amount <= totalStRSR]. We do not enforce this here; the
     [unstake_conservation] lemma takes it as an explicit hypothesis.
@@ -188,8 +219,16 @@ Fixpoint queue_fifo (q : list Withdrawal.t) : Prop :=
         rsrAmount    = amount * rate / FIX_ONE   (FLOOR)
         totalStRSR'  = totalStRSR - amount
         totalRSRStaked' = totalRSRStaked - rsrAmount
+        draftRSR'    = draftRSR + rsrAmount
         queue'       = queue ++ [{rsrAmount; now + delay}]
-*)
+
+    The simulation conflates the per-account [draftQueues[draftEra]
+    [account]] mapping with a single global [queue]; production
+    tracks per-account cumulative-draft running totals while we
+    record each entry's individual [rsrAmount]. The conservation
+    invariant carried by [Valid.t] ([sum(queue.rsrAmount) <= draftRSR])
+    is the simulation analog of production's [total-drafts /
+    [draft-rate]] invariant block. *)
 Definition unstake
     (s : Storage.t) (amount : U256.t) (now : U256.t) (delay : U256.t)
     : Storage.t :=
@@ -206,6 +245,9 @@ Definition unstake
     Storage.ratio                   := s.(Storage.ratio);
     Storage.lastPayout              := s.(Storage.lastPayout);
     Storage.queue                   := enqueue s.(Storage.queue) w;
+    Storage.era                     := s.(Storage.era);
+    Storage.draftEra                := s.(Storage.draftEra);
+    Storage.draftRSR                := s.(Storage.draftRSR) + rsrAmount;
   |}.
 
 (** ---------- withdraw ----------
@@ -214,13 +256,13 @@ Definition unstake
     and return the [rsrAmount] paid out to the staker. If the front is not
     yet ready, the queue is unchanged and 0 is returned.
 
-    Note: the [totalRSRStaked] field is NOT decremented here — [unstake]
-    already moved that quantity out of the active stake pool when the
-    entry was enqueued. In the simulation's collapsed accounting,
-    [totalRSRStaked] tracks the active backing pool only; the queue
-    entries themselves represent the locked draft RSR. A user redemption
-    via [withdraw] just transfers the entry's [rsrAmount] from the
-    locked-in-queue pool to the staker's balance.
+    On a successful pop the [draftRSR] pool is decremented by exactly
+    the popped entry's [rsrAmount] (production line 341), preserving
+    the conservation invariant
+        sum(queue.rsrAmount) <= draftRSR.
+    [totalRSRStaked] is untouched (it tracks the active backing pool
+    only; [unstake] already moved this quantity out when the entry was
+    enqueued).
 
     Production's [withdraw] takes an [endId] specifying how many entries
     to claim in a batch. We model the simpler one-step pop here; batch
@@ -251,6 +293,9 @@ Definition withdraw (s : Storage.t) (now : U256.t) : Storage.t * U256.t :=
         Storage.ratio                   := s.(Storage.ratio);
         Storage.lastPayout              := s.(Storage.lastPayout);
         Storage.queue                   := rest;
+        Storage.era                     := s.(Storage.era);
+        Storage.draftEra                := s.(Storage.draftEra);
+        Storage.draftRSR                := s.(Storage.draftRSR) - w.(Withdrawal.rsrAmount);
       |}, w.(Withdrawal.rsrAmount))
     else (s, 0)
   end.
@@ -283,9 +328,225 @@ Definition payoutRewards
       Storage.ratio                   := s.(Storage.ratio);
       Storage.lastPayout              := s.(Storage.lastPayout) + numPeriods;
       Storage.queue                   := s.(Storage.queue);
+      Storage.era                     := s.(Storage.era);
+      Storage.draftEra                := s.(Storage.draftEra);
+      Storage.draftRSR                := s.(Storage.draftRSR);
     |}.
 
-(** Validity predicate — the pure-Z invariants the model maintains. *)
+(** ---------- beginEra / beginDraftEra ----------
+
+    Production lines 695-705 / 707-714: the era-reset primitives. They
+    are called internally from [seizeRSR] (when a stake or draft pool is
+    fully consumed) and from [resetStakes] (governance-triggered when
+    one of the rates exits its safe band).
+
+    [beginEra] zeros the active stake side ([totalStRSR],
+    [totalRSRStaked]) and increments [era]. Production additionally
+    resets [stakeRate] to [FIX_ONE]; the simulation derives the rate
+    from totals so the convention falls out of [exchange_rate]
+    returning [FIX_ONE_Z] when [totalStRSR = 0].
+
+    [beginDraftEra] zeros the draft side ([draftRSR], [queue]) and
+    increments [draftEra]. *)
+Definition beginEra (s : Storage.t) : Storage.t :=
+  {|
+    Storage.totalStRSR              := 0;
+    Storage.totalRSRStaked          := 0;
+    Storage.totalRewardsAccumulated := s.(Storage.totalRewardsAccumulated);
+    Storage.ratio                   := s.(Storage.ratio);
+    Storage.lastPayout              := s.(Storage.lastPayout);
+    Storage.queue                   := s.(Storage.queue);
+    Storage.era                     := s.(Storage.era) + 1;
+    Storage.draftEra                := s.(Storage.draftEra);
+    Storage.draftRSR                := s.(Storage.draftRSR);
+  |}.
+
+Definition beginDraftEra (s : Storage.t) : Storage.t :=
+  {|
+    Storage.totalStRSR              := s.(Storage.totalStRSR);
+    Storage.totalRSRStaked          := s.(Storage.totalRSRStaked);
+    Storage.totalRewardsAccumulated := s.(Storage.totalRewardsAccumulated);
+    Storage.ratio                   := s.(Storage.ratio);
+    Storage.lastPayout              := s.(Storage.lastPayout);
+    Storage.queue                   := [];
+    Storage.era                     := s.(Storage.era);
+    Storage.draftEra                := s.(Storage.draftEra) + 1;
+    Storage.draftRSR                := 0;
+  |}.
+
+(** ---------- cancelUnstake_last ----------
+
+    Pop the *back* (most recently enqueued) entry of the queue and
+    re-stake its [rsrAmount] at the *current* exchange rate. Mirrors
+    production's [cancelUnstake] (StRSR.sol#356) for a single tail
+    entry: production iterates over a contiguous suffix of the
+    per-account queue indexed by [endId]; the simulation models the
+    one-step LIFO pop, which composes by iteration. The rate used to
+    convert RSR back to stRSR is the *current* [exchange_rate], not the
+    rate at unstake time, matching production's [mintStakes] call.
+
+    The total RSR sum [totalRSRStaked + draftRSR] is preserved by this
+    operation (RSR moves from [draftRSR] back into [totalRSRStaked]).
+    The stRSR side is lossy: [unstake] did
+        rsrAmount = floor(amount * rate1 / FIX_ONE)
+    and [cancelUnstake_last] mints
+        amount' = floor(rsrAmount * FIX_ONE / rate2).
+    With [rate1 = rate2 = FIX_ONE] the round-trip is exact; otherwise
+    the two FLOOR steps each may shave one wei.
+
+    Pre: [s.(queue) <> []]. We use the [match]-on-tail idiom to make
+    the empty case a no-op (matching production's
+    [if (endId == 0 || firstId >= endId) return]).
+
+    Diverges from production:
+      - Per-account [firstRemainingDraft]/[draftQueues] not modeled —
+        the simulation has a single global queue.
+      - [endId] is fixed to the queue's tail; production allows any
+        [endId] in a contiguous suffix.
+      - Production's [_payoutRewards] is called inline; the simulation
+        callers compose [payoutRewards] explicitly when they need the
+        accrual. *)
+Definition cancelUnstake_last (s : Storage.t) : Storage.t :=
+  match List.rev s.(Storage.queue) with
+  | [] => s
+  | w :: rest_rev =>
+    let qFront := List.rev rest_rev in
+    let rsrAmount := w.(Withdrawal.rsrAmount) in
+    (* Convert RSR back to stRSR at the current rate. With totalStRSR =
+       0 we use the genesis FIX_ONE convention: mint one-for-one. *)
+    let minted :=
+      if s.(Storage.totalStRSR) =? 0 then
+        rsrAmount
+      else
+        let rate := exchange_rate s in
+        divrnd (rsrAmount * FIX_ONE_Z) rate RoundingMode.FLOOR
+    in
+    {|
+      Storage.totalStRSR              := s.(Storage.totalStRSR) + minted;
+      Storage.totalRSRStaked          := s.(Storage.totalRSRStaked) + rsrAmount;
+      Storage.totalRewardsAccumulated := s.(Storage.totalRewardsAccumulated);
+      Storage.ratio                   := s.(Storage.ratio);
+      Storage.lastPayout              := s.(Storage.lastPayout);
+      Storage.queue                   := qFront;
+      Storage.era                     := s.(Storage.era);
+      Storage.draftEra                := s.(Storage.draftEra);
+      Storage.draftRSR                := s.(Storage.draftRSR) - rsrAmount;
+    |}
+  end.
+
+(** ---------- sum_rsr_amounts ----------
+
+    Sum of [rsrAmount] across the queue. Used by the conservation
+    invariant in [Valid.t] and by the [seizeRSR] proportional-split
+    proofs. Defined here (rather than in the [Integration_unstake_lifecycle]
+    file where it originated) so that the simulation's own [Valid.t]
+    invariants can refer to it. *)
+Fixpoint sum_rsr_amounts (q : list Withdrawal.t) : Z :=
+  match q with
+  | [] => 0
+  | w :: rest => w.(Withdrawal.rsrAmount) + sum_rsr_amounts rest
+  end.
+
+(** ---------- seizeRSR ----------
+
+    Production-faithful seizure: backing-manager-triggered removal of
+    [rsrAmount] qRSR from the StRSR contract, split proportionally
+    between the stake and draft pools. If either pool is fully
+    consumed (or its derived rate would saturate the [MAX_STAKE_RATE]
+    / [MAX_DRAFT_RATE] cap), the corresponding era is reset.
+
+    Production line 436-507. The simulation's collapsed-rate model
+    means we don't separately maintain [stakeRate] / [draftRate]
+    fields, so the [stakeRate > MAX_STAKE_RATE] saturation trigger
+    can't be checked by direct comparison. We approximate it via the
+    product
+        totalStRSR' * FIX_ONE > stakeRSR_post * MAX_STAKE_RATE
+    which is the "rate would round above the cap" condition.
+
+    Mathematical kernel (production line 457-484):
+        total_RSR    = totalRSRStaked + draftRSR
+        keep_ratio   = 1 - rsrAmount / total_RSR
+        stake_share  = ceil(totalRSRStaked * rsrAmount / total_RSR)
+        draft_share  = ceil(draftRSR       * rsrAmount / total_RSR)
+        seizedRSR    = stake_share + draft_share + (era-reset residues)
+
+    Production uses [rsrBalance = stakeRSR + draftRSR + rewards] as
+    the divisor; the simulation's [rsrAmount] is constrained to
+    [<= totalRSRStaked + draftRSR] (no separate rewards balance). The
+    proportional-split numerator stays the same, the divisor differs
+    only by the [rewards] term that we abstract away.
+
+    Pre: [rsrAmount <= totalRSRStaked + draftRSR] (production's
+    [SeizeExceedsBalance] revert; we discharge it in the validity
+    preservation lemma rather than enforce it inline).
+
+    Diverges from production:
+      - Single combined seizure step rather than the production's
+        two-phase computation (Phase 1 updates rates, Phase 2 fires
+        era resets). The two phases have the same net effect when
+        [Valid.t] holds; the simulation collapses them.
+      - The [rewards * rsrAmount / rsrBalance] residue piece is not
+        modeled separately (production tracks [rsrRewardsAtLastPayout]
+        which is updated as part of the seizure).
+      - [exchangeRate()] event emission and ERC20 transfer side-effects
+        not modeled (irrelevant to the storage-state invariants). *)
+Definition seizeRSR (s : Storage.t) (rsrAmount : U256.t) : Storage.t :=
+  let totalRSR := s.(Storage.totalRSRStaked) + s.(Storage.draftRSR) in
+  if totalRSR =? 0 then
+    (* Degenerate: nothing to seize. Production reverts on
+       [SeizeExceedsBalance] when [rsrAmount > 0]; with [rsrAmount = 0]
+       production's [_notZero] guard reverts first. The simulation
+       returns [s] unchanged for both cases (no-op semantics for the
+       non-Valid input). *)
+    s
+  else
+    (* CEIL division for stake_share, residual to draft_share so that
+       the two add to [rsrAmount] exactly (production splits this way
+       to avoid leaving dust in either pool). *)
+    let stake_share :=
+      divrnd (s.(Storage.totalRSRStaked) * rsrAmount) totalRSR RoundingMode.CEIL in
+    let draft_share := rsrAmount - stake_share in
+    let stakeRSR_post := s.(Storage.totalRSRStaked) - stake_share in
+    let draftRSR_post := s.(Storage.draftRSR) - draft_share in
+    (* Stake-side era reset trigger: stakeRSR_post = 0, OR (totalStRSR > 0
+       and the implied stakeRate would exceed MAX_STAKE_RATE). The latter
+       fires when totalStRSR * FIX_ONE > stakeRSR_post * MAX_STAKE_RATE
+       (i.e. CEIL(totalStRSR * FIX_ONE / stakeRSR_post) > MAX_STAKE_RATE). *)
+    let stake_reset :=
+      (stakeRSR_post =? 0) ||
+      ((0 <? s.(Storage.totalStRSR)) &&
+       (s.(Storage.totalStRSR) * FIX_ONE_Z >? stakeRSR_post * MAX_STAKE_RATE)) in
+    let draft_reset :=
+      (draftRSR_post =? 0) ||
+      ((sum_rsr_amounts s.(Storage.queue) >? 0) &&
+       (sum_rsr_amounts s.(Storage.queue) * FIX_ONE_Z >? draftRSR_post * MAX_DRAFT_RATE)) in
+    (* Build the post-seizure storage by applying the proportional
+       deltas, then conditionally apply [beginEra] / [beginDraftEra]. *)
+    let s_phase1 := {|
+      Storage.totalStRSR              := s.(Storage.totalStRSR);
+      Storage.totalRSRStaked          := stakeRSR_post;
+      Storage.totalRewardsAccumulated := s.(Storage.totalRewardsAccumulated);
+      Storage.ratio                   := s.(Storage.ratio);
+      Storage.lastPayout              := s.(Storage.lastPayout);
+      Storage.queue                   := s.(Storage.queue);
+      Storage.era                     := s.(Storage.era);
+      Storage.draftEra                := s.(Storage.draftEra);
+      Storage.draftRSR                := draftRSR_post;
+    |} in
+    let s_after_stake := if stake_reset then beginEra s_phase1 else s_phase1 in
+    if draft_reset then beginDraftEra s_after_stake else s_after_stake.
+
+(** Validity predicate — the pure-Z invariants the model maintains.
+
+    [queue_entries_nonneg] is the per-entry counterpart of the
+    aggregate [queue_drafts_le_draftRSR]: every queue entry's
+    [rsrAmount] is non-negative. Required by [withdraw] (decrementing
+    [draftRSR] by a non-negative amount keeps it non-negative) and by
+    the queue-manipulation lemmas in [seizeRSR] / [cancelUnstake_last].
+    Operations that push entries (just [unstake]) push an [rsrAmount]
+    computed by [divrnd] of a non-negative numerator by a positive
+    denominator, which is always non-negative; the validity preservation
+    lemmas discharge this. *)
 Module Valid.
   Record t (s : Storage.t) : Prop := {
     totalStRSR_nonneg     : 0 <= s.(Storage.totalStRSR);
@@ -293,6 +554,12 @@ Module Valid.
     rewards_nonneg        : 0 <= s.(Storage.totalRewardsAccumulated);
     ratio_in_range        : 0 <= s.(Storage.ratio) <= MAX_REWARD_RATIO;
     queue_ordered         : queue_fifo s.(Storage.queue);
+    draftRSR_nonneg       : 0 <= s.(Storage.draftRSR);
+    queue_drafts_le_draftRSR :
+      sum_rsr_amounts s.(Storage.queue) <= s.(Storage.draftRSR);
+    queue_entries_nonneg  :
+      forall w, List.In w s.(Storage.queue) ->
+                0 <= w.(Withdrawal.rsrAmount);
   }.
 End Valid.
 

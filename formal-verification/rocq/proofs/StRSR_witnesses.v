@@ -64,6 +64,9 @@ Definition genesis_storage : Storage.t := {|
   Storage.ratio                   := cal_ratio;
   Storage.lastPayout              := 0;
   Storage.queue                   := [];
+  Storage.era                     := 0;
+  Storage.draftEra                := 0;
+  Storage.draftRSR                := 0;
 |}.
 
 Definition cal_storage : Storage.t := {|
@@ -73,6 +76,9 @@ Definition cal_storage : Storage.t := {|
   Storage.ratio                   := cal_ratio;
   Storage.lastPayout              := 0;
   Storage.queue                   := [];
+  Storage.era                     := 0;
+  Storage.draftEra                := 0;
+  Storage.draftRSR                := 0;
 |}.
 
 (** [unstake_init_storage] mirrors the rate=FIX_ONE collapse used by the
@@ -84,6 +90,9 @@ Definition unstake_init_storage : Storage.t := {|
   Storage.ratio                   := cal_ratio;
   Storage.lastPayout              := 0;
   Storage.queue                   := [];
+  Storage.era                     := 0;
+  Storage.draftEra                := 0;
+  Storage.draftRSR                := 0;
 |}.
 
 (** ===== W1: genesis stake mints 1:1. =====
