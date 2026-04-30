@@ -114,6 +114,6 @@ proofs/IssuancePremium_witnesses.v
 proofs/Throttle_witnesses.v
 proofs/Fixed_chain_extras.v
 proofs/Integration_linear_history.v
-Audit.v
 proofs/EndToEnd_complete.v
 proofs/CAS_additional_findings.v
+Audit.v

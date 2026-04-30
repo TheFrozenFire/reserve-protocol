@@ -77,7 +77,7 @@ Module Valid.
   Record t (s : Storage.t) : Prop := {
     ratio_le_max     : s.(Storage.ratio) <= MAX_RATIO;
     ratio_nonneg     : 0 <= s.(Storage.ratio);
-    lastPayout_uint48 : 0 <= s.(Storage.lastPayout) <= UINT256_MAX;
+    lastPayout_u256 : 0 <= s.(Storage.lastPayout) <= UINT256_MAX;
     lastPayoutBal_u256 : 0 <= s.(Storage.lastPayoutBal) <= UINT256_MAX;
   }.
 End Valid.
