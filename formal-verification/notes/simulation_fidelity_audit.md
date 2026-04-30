@@ -436,18 +436,82 @@ guarantees insertion-order traversal — sim uses a plain list).
 5. The DAO-fee leg coverage was added in the follow-up (`distributeAmounts_with_dao_fee`); legacy proofs against `distributeAmounts` apply only to deployments where `daoFeeRegistry` is unset OR `feeNumerator = 0`. Specific xchecks in `proofs/CAS_additional_findings.v` formalize the ⩾1% DAO fee bug pinned in the audit.
 6. The `MAX_DESTINATIONS = 100` and per-share `MAX_DISTRIBUTION = 10000` caps are constants in the sim but unenforced at write time (no `setDistribution`). Proofs assuming "the destinations list has length ≤ 100" must carry that as a Valid-style hypothesis.
 
-## BackingManager
+## BackingManager (gold-standard audit)
 
-**Two pure functions only.** `computeNewBasketsAndNeeded`,
-`computeSurplusSplit`. The full `BackingManager` contract has many other
-state-mutating functions: `manageTokens`, `forwardRevenue` (full),
-`compromiseBasketsNeeded`, `setBackingBuffer`, etc. **None modeled.**
+The simulation captures **two layers**: (1) a pure-math kernel
+(`computeNewBasketsAndNeeded`, `computeSurplusSplit`); (2) an operation
+surface added in the audit follow-up — `forwardRevenueIter`,
+`forwardRevenue`, `prepareRecollateralizationTrade`,
+`settleRecollateralizationTrade` — composing the kernel with
+`Rebalance.basketRange` and `TradeLib.buyAmount`, plus a `Storage.t`
+record (`basketsNeeded`, `backingBuffer`, `tradeStatus`,
+`pendingTrade`) and an explicit `TradeStatus` state machine
+(NONE / OPEN / SETTLED). It omits **the asset-registry indirection
+(sim takes a pre-resolved `AssetList` as input), the oracle layer,
+the trade *execution* (only preparation and settlement bookkeeping —
+the actual ERC20 transfers and Gnosis interactions live in
+DutchTrade/GnosisTrade simulations), the `fullyCollateralized()` /
+`basketHandler.isReady()` gates, the `tradingDelay` time-gate, the
+duplicate-token revert, the reentrancy modifier, the SafeERC20
+calls inside `forwardRevenue`, and the auth/governance surface
+(`grantRTokenAllowance`, `setBackingBuffer`, `setTradingDelay`)**.
+The proofs against this model are correct for the iteration math
+and the state-machine transitions; transferability requires the
+caller to discharge the auth, oracle, and registry boundaries.
 
-The file/module name "BackingManager" oversells what's modeled —
-`BackingManagerForwardRevenueMath` would be more accurate.
+### State omitted
 
-**Gaps**: the entire trade-trigger lifecycle, the basket-needs lifecycle,
-the recollateralization flow.
+| Production state | Purpose | Simulation analog |
+|---|---|---|
+| `assetRegistry`, `basketHandler`, `distributor`, `rToken`, `rsr`, `stRSR`, `rsrTrader`, `rTokenTrader`, `furnace` (component pointers) | Cross-component routing | None — sim takes their data (asset list, totals, basketsHeldBottom, etc.) as inputs. |
+| `MAX_TRADING_DELAY` (uint48 = 1 year) | Cap on `tradingDelay` setter | None. |
+| `MAX_BACKING_BUFFER` (uint192 = FIX_ONE) | Cap on `backingBuffer` setter | **`MAX_BACKING_BUFFER ✓`** — enforced by `Valid.bufferInputs.backingBuffer_le_max`. |
+| `tradingDelay` (uint48) | Time gate on `rebalance` after basket switch | None. The `block.timestamp >= basketHandler.timestamp() + tradingDelay` check at production line 123 is unmodeled. |
+| `backingBuffer` (uint192, governance-set) | Extra collateral fraction held before recognising revenue | **`Storage.backingBuffer ✓`**. |
+| `tradeEnd[TradeKind]` (mapping kind→uint48) | Per-kind last endTime; DoS prevention at production line 117 | None — sim's `TradeStatus` is a single flag, not per-kind. |
+| `tokensOut[IERC20]` (mapping erc20→uint192) | Tokens currently out on a trade; included in `bals[i]` at production line 298 | None. |
+| `tradesOpen` (uint8, parent `TradingP1`) | Counter of open trades | Modeled abstractly as `TradeStatus.t` (NONE / OPEN / SETTLED). |
+| `__gap` (uint256[38]) | OZ reserved storage | None. |
+| TradingP1-inherited (`maxTradeSlippage`, `minTradeVolume`) | Trade-sizing params | Passed in as arguments to `prepareRecollateralizationTrade`. |
+| Component-inherited (governance role, paused/frozen flags) | Auth and pause | None — `requireNotTradingPausedOrFrozen()` at production lines 109/179 unmodeled. |
+
+### Operations omitted
+
+| Production function | Effect | Modeled? |
+|---|---|---|
+| `init(IMain, uint48 tradingDelay_, uint192 backingBuffer_, uint192 maxTradeSlippage_, uint192 minTradeVolume_)` (line 49) | Sets up component cache, calls setTradingDelay / setBackingBuffer | **No.** Sim takes `Storage.init(basketsNeeded, backingBuffer)` as a constructor only. |
+| `grantRTokenAllowance(IERC20 erc20)` (line 69) | Grants RToken max allowance over a registered erc20 | **No.** |
+| `settleTrade(IERC20 sell)` (line 85) | Settles the trade for `sell`; chains into `rebalance(kind)` if caller is the trade itself | **Partial** — `settleRecollateralizationTrade` covers the OPEN→NONE bookkeeping; the chain-into-rebalance and the `super.settleTrade` indirection are unmodeled. |
+| `rebalance(TradeKind kind)` (line 108) | Full recollateralization: refresh registry, check gates, compute `basketsHeld`, dissolve held RToken, call `prepareRecollateralizationTrade` lib, either start a trade or compromise | **Partial** — `prepareRecollateralizationTrade` (sim) covers the post-gating composition (basketRange + TradeLib.buyAmount → TradeStatus.OPEN). The pre-call gates (`tradesOpen == 0`, `basketHandler.isReady()`, `tradingDelay`, `basketsHeld.bottom < rToken.basketsNeeded()`, RToken-balance dissolve, RSR-seizure-when-sellERC20-is-rsr at line 159–163), and the haircut path (`compromiseBasketsNeeded`) are **unmodeled** — the sim treats the haircut as a settlement variant. |
+| `forwardRevenue(IERC20[] erc20s)` (line 178) | Forward held RSR to stRSR, mint revenue RToken if `baskets > basketsNeeded`, distribute surpluses across rsrTrader/rTokenTrader | **`forwardRevenue` ✓** for the math + iteration aggregate (sim line 408). The `rsr.balanceOf(this)` transfer to stRSR (production line 212–216), the `rToken.mint(...)` call (line 222), `requireNotTradingPausedOrFrozen` (line 179), `ArrayLib.allUnique(erc20s)` revert (line 180), `assetRegistry.refresh` (line 182), the four pre-gates (`tradesOpen == 0`, `isReady`, `tradingDelay`, `basketsHeld.bottom >= basketsNeeded`), and the per-asset `safeTransfer` (lines 253, 256) are **unmodeled**. |
+| `tradingContext(BasketRange basketsHeld)` (line 272) | Builds the per-asset `quantities[]` and `bals[]` arrays for the registry | **No** — sim takes the AssetList as an input. |
+| `compromiseBasketsNeeded(uint192 basketsHeldBottom)` private (line 309) | Sets `rToken.basketsNeeded := basketsHeldBottom` (haircut) | **Partial** — modeled as a `settleRecollateralizationTrade` variant where `newBasketsNeeded` is set directly; the sim does not flag this as semantically distinct from a normal settle, but production is. |
+| `forceSettleTrade(ITrade trade)` (line 321) — governance | Force-close a stuck trade | **No.** |
+| `setTradingDelay(uint48)` (line 327) — governance | Validates and writes `tradingDelay` | **No.** |
+| `setBackingBuffer(uint192)` (line 335) — governance | Validates `<= MAX_BACKING_BUFFER` and writes `backingBuffer` | **No.** |
+| `cacheComponents()` (line 343) | Re-reads component pointers post-upgrade | **No.** |
+
+### What the simulation *does* faithfully model
+
+- `computeNewBasketsAndNeeded(basketsHeldBottom, basketsNeeded, backingBuffer)` produces `(basketsNeeded', mintAmount, needed)`, with `mintAmount > 0` only when `basketsHeldBottom > basketsNeeded * (1 + buffer)` and `needed = CEIL(basketsNeeded' * (1 + buffer))` — the post-#1283 CEIL mitigation.
+- `computeSurplusSplit(needed, quantity, bal, decimals, rTokenTotal, rsrTotal)` reproduces the per-asset `bal > req` branch (production lines 243–261), including the explicit `tokensPerShare = 0 → dust = delta, both shares = 0` path which production handles as `continue` (sim line 202–207).
+- `Result.Revert` when `totalShares = 0` mirrors the production division-by-zero pre-check at line 246 (production has `// no div-by-0: Distributor guarantees ...`; sim makes the would-be revert explicit).
+- `forwardRevenueIter` walks the asset list, calling `computeSurplusSplit` for each row, accumulating splits + `(rsrSum, rTokenSum, dustSum)` aggregates. Conservation across the iteration is preserved by `stepAggregate`.
+- `forwardRevenue` composes `computeNewBasketsAndNeeded` with `forwardRevenueIter`, threading the result through `Storage.t` post-state. The `mintAmount` is surfaced; whether it's zero-or-positive is what production's `if (baskets > basketsNeeded) rToken.mint(...)` keys on.
+- `prepareRecollateralizationTrade` transitions `tradeStatus: NONE → OPEN` when `needsTrade` fires (range.low < basketsNeeded < range.high+1), capturing the sell/buy ERC20s, sellAmount, and buyAmount from `TradeLib.buyAmount`.
+- `settleRecollateralizationTrade` transitions `tradeStatus: OPEN → NONE` and writes `basketsNeeded := newBasketsNeeded`. Auth check (`_msgSender() == address(trade)`) is documented as unmodeled.
+- `Valid.bufferInputs` and `Valid.storage` carry uint192 bounds + the `tradeStatus`/`pendingTrade` consistency invariant.
+
+### Implications for proof transferability
+
+1. Conservation lemmas about `forwardRevenue` (e.g. "sum(rsr) + sum(rTok) + sum(dust) = sum(deltas) across all assets") transfer directly *within* the simulation's boundary — they say nothing about the actual `safeTransfer` calls in production, only about the bookkeeping math.
+2. The `rebalance` gates (RToken-dissolve, `basketsHeld.bottom >= basketsNeeded` early-return at line 133, RSR seizure when `sellERC20 == rsr`, lines 159–163) are *entirely unmodeled*. Lemmas about `prepareRecollateralizationTrade` apply to a much wider input space than production's actual reachable set.
+3. The most surprising divergence: the `compromiseBasketsNeeded` haircut path is collapsed into `settleRecollateralizationTrade`'s `newBasketsNeeded` argument. Production has two structurally distinct paths (start-trade vs haircut) gated by the lib's `doTrade` boolean; the sim only models the post-decision settle. A reviewer auditing "the haircut branch is correctly handled" cannot answer the question with this sim alone.
+4. The asset-registry boundary is the biggest scoping decision: `forwardRevenue` and `prepareRecollateralizationTrade` consume an `AssetList` as input. In production, that list is built inside `tradingContext()` from `assetRegistry.getRegistry()` plus `basketHandler.quantityUnsafe(...)` plus `asset.bal(this)` plus `tokensOut[erc20]` plus the RSR-from-stRSR boost (production line 301). Each of these is a potential failure or staleness mode the simulation cannot witness.
+5. The `tradingDelay` / `isReady` / `tradesOpen == 0` / `notTradingPausedOrFrozen` four-fold pre-gate is unmodeled. Lemmas hold even when the protocol is paused, the basket isn't ready, or another trade is open — production reverts in all those cases.
+6. The "duplicate tokens" revert (`ArrayLib.allUnique(erc20s)`, line 180) is unmodeled: a caller passing a duplicate ERC20 to `forwardRevenue` would, in the sim, double-count surplus from that asset.
+7. The `tradeEnd[kind]` per-kind DoS guard (line 117) and `tokensOut[erc20]` accounting (line 86, 168) are unmodeled — both are 3.0.0 / 3.1.0 additions specifically to prevent same-block trade chains. Sim cannot witness their absence.
+8. `setBackingBuffer` and `setTradingDelay` (governance setters) are unmodeled. Live-vs-frozen for `backingBuffer` is recorded under cross-cutting finding 2.
 
 ## Rebalance / RecollateralizationLib
 
