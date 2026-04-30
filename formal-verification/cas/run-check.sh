@@ -33,6 +33,7 @@ scripts=(
   backing_manager/recollateralization_state_machine.gp
   collateral/status_state_machine.gp
   collateral/ref_per_tok_monotonicity.gp
+  collateral/ctoken_refresh.gp
   gnosis_trade/min_buy_amount.gp
   gnosis_trade/settlement_floor.gp
   deprecation/rtoken_deprecation.gp

@@ -41,6 +41,9 @@ proofs/GnosisTrade_xcheck.v
 simulations/Collateral.v
 proofs/Collateral.v
 proofs/Collateral_xcheck.v
+simulations/CTokenFiatCollateral.v
+proofs/CTokenFiatCollateral.v
+proofs/CTokenFiatCollateral_xcheck.v
 simulations/IssuancePremium.v
 proofs/IssuancePremium.v
 proofs/IssuancePremium_xcheck.v
@@ -49,6 +52,7 @@ proofs/StRSR_inversion.v
 proofs/Distributor_validity.v
 proofs/Furnace_validity.v
 proofs/Collateral_validity.v
+proofs/CTokenFiatCollateral_validity.v
 proofs/Throttle_validity.v
 proofs/BackingManager_validity.v
 proofs/Fixed_safety.v
