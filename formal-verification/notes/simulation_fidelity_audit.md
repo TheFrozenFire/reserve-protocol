@@ -401,10 +401,96 @@ correctly terminal.
 - `revenueShowing` is treated as immutable in the simulation but
   `revenueHiding` may be governance-mutable in some collateral
   variants — worth checking per-plugin.
-- The plugin layer (FiatCollateral, AppreciatingFiatCollateral,
-  CTokenFiatCollateral, etc.) has subclass-specific overrides not
-  modeled — the simulation captures the base abstraction only.
+- Plugin-specific overrides: the **two highest-deployment plugins are
+  now modeled** (CTokenFiatCollateral, CurveStableCollateral — see
+  per-plugin sections below). Other deployed plugins
+  (CurveStableMetapoolCollateral, AaveV3FiatCollateral, RTokenAsset,
+  OETHCollateral, CTokenV3Collateral, CurveRecursiveCollateral,
+  StakeDAORecursiveCollateral, etc.) still consume the abstract base
+  only.
 - Oracle layer omitted; `pegPrice` and `low` are passed as inputs.
+
+## CTokenFiatCollateral
+
+**Plugin override of AppreciatingFiatCollateral.** Models the two
+plugin-specific surfaces:
+
+- `underlyingRefPerTok()` (CTokenFiatCollateral.sol#L66-L70) →
+  `refPerTok_of_rate(rate, refDecimals)` — a pure base-10 shift
+  scaling the cToken's `exchangeRateStored()` to a FIX_ONE-scale
+  ref-per-tok. Two branches:
+  - `refDecimals <= 8`: multiply by `10^(8 - refDecimals)`.
+  - `refDecimals  > 8`: floor-divide by `10^(refDecimals - 8)`.
+  Both are monotone in `rate`.
+
+- `refresh()` (CTokenFiatCollateral.sol#L44-L63) — wraps the parent's
+  refresh logic with a try/catch around `exchangeRateCurrent()`. If
+  accrual reverts (modeled as `accrued = false`), the plugin marks
+  DISABLED on the same refresh; otherwise the parent's refresh
+  handles all hard / soft default checks via the abstract base
+  state machine.
+
+**Production divergences explicitly noted**:
+- The "Compound v2 invariant: exchangeRateStored is monotone-up" is a
+  Compound-protocol-level property, NOT a plugin guarantee. A
+  hypothetical exchange-rate manipulation (artificially-advanced
+  accrual, exploit on the underlying market) would surface as a
+  jumped `rate`; the plugin's `underlyingRefPerTok` reports the new
+  value and the parent's `updateExposed` either appreciates exposed
+  (no default) or hard-defaults (rate dropped past the revenue-hiding
+  band). Captured by CT-5 / CT-6 in the CAS witness.
+- COMP rewards (`claimRewards`, `comp`/`comptroller` storage) are
+  out of scope — reward accounting is orthogonal to the collateral
+  state machine.
+
+**Coverage** (Section 9 of `Audit.v`):
+- `audit_ctoken_refPerTok_monotone_in_rate`
+- `audit_ctoken_refresh_accrual_revert_disables`
+- `audit_ctoken_refresh_preserves_validity`
+- `audit_ctoken_refresh_disabled_terminal`
+- CAS witness `cas/collateral/ctoken_refresh.gp` (8 probes
+  CT-1..CT-8).
+
+## CurveStableCollateral
+
+**Plugin override of AppreciatingFiatCollateral.** Models the two
+plugin-specific surfaces:
+
+- `underlyingRefPerTok()` (CurveStableCollateral.sol#L184-L186) →
+  identity passthrough of `_safeWrap(curvePool.get_virtual_price())`.
+  No decimal shift (Curve LP token is 18-decimal; vp is 18-decimal-scaled).
+
+- `refresh()` (CurveStableCollateral.sol#L108-L167) — inlines the
+  parent's refresh logic (does NOT use `super.refresh()`); EXTENDS
+  the parent's soft-default disjunction with `_anyDepeggedInPool()`
+  and `_anyDepeggedOutsidePool()`. Modeled as a single Boolean
+  `poolDepegged` input. Outer `get_virtual_price()` revert →
+  DISABLED; inner `tryPrice()` revert → IFFY (NOT DISABLED).
+
+**Production divergences explicitly noted**:
+- `get_virtual_price()` is **NOT monotonically non-decreasing** in
+  production. A whale's imbalanced withdrawal can decrease vp even
+  with no fee anomaly; the StableSwap invariant is convex but only
+  globally. The defense mechanism is the parent's hard-default
+  branch (`underlying < exposedReferencePrice`); there is **NO
+  additional Curve-specific threshold** — the revenue-hiding band IS
+  the threshold. Captured by CV-2 / CV-3 / CV-7 in the CAS witness.
+- `pegPrice` is hard-coded to 0 for stable pools (no single peg to
+  surface), so the parent's peg check effectively delegates to
+  `_anyDepeggedInPool` for the per-token oracle aggregate. We model
+  this faithfully via `poolDepegged`.
+- The Curve `tryPrice` math (spot AMM balances divided by LP supply)
+  is intentionally MEV-manipulable per the source comments. We
+  model only the resulting `(low, high, pegPrice = 0)` tuple, not
+  the spot-price computation itself.
+
+**Coverage** (Section 9 of `Audit.v`):
+- `audit_curve_hardDefault_iff_vp_below_exposed`
+- `audit_curve_refresh_pricedRevert_disables`
+- `audit_curve_refresh_preserves_validity`
+- `audit_curve_refresh_disabled_terminal`
+- CAS witness `cas/collateral/curve_virtual_price_drop.gp` (8 probes
+  CV-1..CV-8).
 
 ## IssuancePremium
 
@@ -557,3 +643,64 @@ Status as of the audit-driven follow-up commits:
      production's revert via Solidity checked subtraction).
    - `paidOutShares` helper sums the inner-loop share count for the
      leg being distributed.
+
+8. **Plugin-specific collateral overrides. ✓ PARTIAL.**
+
+   The two highest-deployment plugins are now modeled on top of the
+   abstract Collateral state machine:
+
+   - **CTokenFiatCollateral.** New `simulations/CTokenFiatCollateral.v`
+     captures `refPerTok_of_rate` (the per-decimal shift over
+     `exchangeRateStored()`) and the `refresh` override that catches
+     `exchangeRateCurrent()` reverts and marks DISABLED. Plugin
+     `Valid.t` extension carries refDecimals in `[1, 30]` and
+     rateSnapshot uint256. Per-plugin proofs in
+     `proofs/CTokenFiatCollateral.v` (refPerTok-monotone-in-rate,
+     accrual-revert-disables, disabled-terminal,
+     hard-default-iff-rate-drops-below-exposed) plus
+     `proofs/CTokenFiatCollateral_validity.v` (refresh preserves
+     plugin Valid.t). CAS witness
+     `cas/collateral/ctoken_refresh.gp` exercises 8 probes
+     CT-1..CT-8 including a manipulated-`accrueInterest` scenario
+     (CT-5: artificial rate jumps appreciate, do NOT default; the
+     parent's hard-default branch is the defense).
+
+   - **CurveStableCollateral.** New
+     `simulations/CurveStableCollateral.v` captures the identity
+     `underlyingRefPerTok` (passthrough of `get_virtual_price()`)
+     and the inlined refresh override that EXTENDS the parent's
+     soft-default disjunction with `_anyDepeggedInPool() ||
+     _anyDepeggedOutsidePool()` (modeled as a single Boolean
+     `poolDepegged`). Plugin `Valid.t` carries virtualPriceLast
+     uint192, poolNTokens in `[2, 4]`, and `pegBottom > 0`.
+     Per-plugin proofs in `proofs/CurveStableCollateral.v`
+     (hardDefault-iff-vp-below-exposed,
+     pricedRevert-outer-disables, no-change-to-exposed-on-revert,
+     disabled-terminal) plus
+     `proofs/CurveStableCollateral_validity.v`. CAS witness
+     `cas/collateral/curve_virtual_price_drop.gp` exercises 8
+     probes CV-1..CV-8 including the whale-withdrawal hardDefault
+     boundary (CV-7: a vp drop of exactly `vp * revHiding /
+     FIX_ONE` is the threshold, one wei more triggers DISABLED).
+
+   Documented production divergences:
+   - cToken: Compound v2's "exchangeRateStored is monotone-up" is
+     not enforced by the plugin; the parent's hard-default branch is
+     the defense against rate manipulation.
+   - Curve: `get_virtual_price()` is NOT monotone in production;
+     whale withdrawals can decrease it. There is NO plugin-specific
+     hardDefault threshold beyond the revenue-hiding band.
+
+   Audit re-exports landed in `Audit.v` Section 9 covering both
+   plugins (8 notations total).
+
+   **Remaining plugins.** Other deployed plugin overrides
+   (CurveStableMetapoolCollateral, CurveStableRTokenMetapoolCollateral,
+   AaveV3FiatCollateral, RTokenAsset, OETHCollateral,
+   CTokenV3Collateral, CurveRecursiveCollateral,
+   StakeDAORecursiveCollateral, YearnV2CurveFiatCollateral,
+   CTokenSelfReferentialCollateral, CTokenNonFiatCollateral,
+   L2ConvexStableCollateral) still rely on the abstract base. The
+   two modeled here are the most-exercised in production — Compound
+   v2 cTokens and Curve stable LPs — and demonstrate the pattern
+   for extending the base abstraction with plugin-specific surfaces.
