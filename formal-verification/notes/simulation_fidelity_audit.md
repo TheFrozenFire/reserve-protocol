@@ -565,19 +565,60 @@ counterpart.
 6. The "deficit + slippage" path at production lines 218–220 (`uoaBottom.mulDiv(FIX_ONE - maxTradeSlippage, buPriceHigh, FLOOR)`) is implicit in `lowSlack`. The simulation cannot witness the maxTradeSlippage parameter at all — proofs cannot reason about live-vs-frozen of that governance value.
 7. The header is honest about the scope: this is an algebraic skeleton, not a production-faithful model. Coverage claims should read "noise envelope and final clipping", not "rebalance basketRange".
 
-## TradeLib
+## TradeLib (gold-standard audit)
 
-**Buy-amount kernel.** Models `safeMulDiv`, `buyAmount`,
-`buyAmountPre` (pre-#1283 mitigation), `coverDeficitSellAmount`,
-`minTradeSize`, `isEnoughToSell_whole`. Saturation behavior matches
-production for `safeMulDiv`.
+The simulation captures **the buy-amount kernel inside
+`prepareTradeSell` (the post-#1283 mitigation: `inner = mul(s, FIX_ONE
+- slippage, CEIL)`, then `safeMulDiv(inner, sellLow, buyHigh, CEIL)`),
+the pre-mitigation FLOOR variant (`buyAmountPre`) for rounding-direction
+witnesses, the `coverDeficitSellAmount` kernel, `minTradeSize`, and
+`isEnoughToSell_whole` (the dust-threshold predicate without the
+quanta-rounding side)**. It omits **the full `prepareTradeSell` /
+`prepareTradeToCoverDeficit` functions (asset-registry queries
+`sell.maxTradeVolume`, `sell.erc20Decimals`, the shiftl_toUint to
+qSellTok / qBuyTok, the assertion / require chain at the entry, the
+`maxTradeSize` cap), the `isEnoughToSell` quanta-rounding side
+(`shiftl_toUint(amt, decimals) > 1`), and the `maxTradeSize` private
+function entirely**. The proofs against this model are correct for
+the slippage-sufficiency math; transferring them to production
+requires the caller to discharge the asset-registry boundary and the
+sell-amount cap.
 
-**Gaps** (acknowledged in header):
-- `prepareTradeSell`/`prepareTradeToCoverDeficit` full functions —
-  only the kernel pieces.
-- Asset-registry indirection (`sell.maxTradeVolume`, etc.).
-- The `shiftl_toUint(amt, decimals) > 1` quanta-rounding side of
-  `isEnoughToSell` (decimals-dependent).
+### State omitted
+
+| Production state | Purpose | Simulation analog |
+|---|---|---|
+| (none — TradeLib is a stateless library) | n/a | n/a |
+| Caller-side `TradeInfo { sell, buy, sellAmount, buyAmount, prices }` | Bundles asset pointers, amounts, sell-low/buy-high/sell-high/buy-low D18 prices | None — sim takes the four scalars `(s, slippage, sellLow, buyHigh)` directly. |
+
+### Operations omitted
+
+| Production function | Effect | Modeled? |
+|---|---|---|
+| `prepareTradeSell(TradeInfo, minTradeVolume, maxTradeSlippage) -> (notDust, TradeRequest)` (line 42) | Validates prices, dust-checks, caps `s` at `maxTradeSize`, computes `b` via the inner-mul / safeMulDiv chain, shifts both into qTok | **Partial.** The kernel `s.mul(FIX_ONE.minus(slippage), CEIL).safeMulDiv(sellLow, buyHigh, CEIL)` (production line 76–80) is captured by `buyAmount`. The `assert(buyHigh != 0 && buyHigh != FIX_MAX && sellLow != FIX_MAX)` at line 48–52, the `notDust = isEnoughToSell(...)` check (line 54), the `maxSell` cap (line 67) and `s > maxSell ? s = maxSell` clip (line 69), the `trade.prices.sellHigh != FIX_MAX` branch with the `require(maxSell > 1, "trade sizing error")` at line 68, the `require(sellLow == 0, "trade pricing error")` at line 71, and the final `shiftl_toUint(int8(decimals), FLOOR)` / `shiftl_toUint(int8(decimals), CEIL)` lifts (lines 83–84) are all **unmodeled**. |
+| `prepareTradeToCoverDeficit(TradeInfo, minTradeVolume, maxTradeSlippage) -> (notDust, TradeRequest)` (line 118) | Asserts non-zero / non-MAX prices, fixMax-clips `buyAmount` to at-least-`minTradeSize`, computes `exactSellAmount = buyAmount * buyHigh / sellLow CEIL`, divides by `(1 - slippage)` CEIL, fixMin-clips with sellAmount, then calls `prepareTradeSell` | **Partial.** The composition kernel `exactSell = ceil(b * buyHigh / sellLow); slippedSell = ceil(exactSell / (FIX_ONE - slippage))` is captured by `coverDeficitSellAmount` (sim line 112). The `fixMax(buyAmount, minTradeSize(...))` floor on the buy amount (line 131), the `fixMin(slippedSell, sellAmount)` cap (line 147), the entry-point asserts (lines 123–128), and the recursive `prepareTradeSell` call (line 148) are **unmodeled**. |
+| `isEnoughToSell(asset, amt, price, minTradeVolume) -> bool` (line 156) | Returns `amt >= minTradeSize(...) && shiftl_toUint(amt, decimals) > 1` | **Partial.** Sim's `isEnoughToSell_whole` covers the LHS only (the whole-token side); the `shiftl_toUint(amt, decimals) > 1` quanta-rounding RHS is **unmodeled** (decimals-dependent — header explicitly defers). |
+| `minTradeSize(uint192 minTradeVolume, uint192 price) -> uint192` private (line 174) | `price == 0 ? FIX_MAX : minTradeVolume.div(price, CEIL)`, with a min-of-1 floor | **`minTradeSize` ✓**. |
+| `maxTradeSize(IAsset sell, IAsset buy, uint192 price) -> uint192` private (line 182) | `min(sell.maxTradeVolume(), buy.maxTradeVolume()).safeDiv(price, FLOOR)`, with min-of-1 floor | **No.** This is the cap that production applies in `prepareTradeSell` line 67; sim has no analog. |
+
+### What the simulation *does* faithfully model
+
+- `safeMulDiv(a, b, c, mode)` with the four-way edge-case dispatch: `a=0||b=0 → 0`; `a=FIX_MAX||b=FIX_MAX||c=0 → FIX_MAX` (saturate); else `divrnd(a*b, c, mode)` clamped at FIX_MAX. Header notes the production `mulDiv256` Newton-iteration kernel for full-precision is *not* modeled — the sim uses exact `Z` arithmetic (no overflow hazard at this level).
+- `buyAmount(s, slippage, sellLow, buyHigh)`: the exact composition `safeMulDiv(mul(s, FIX_ONE - slippage, CEIL), sellLow, buyHigh, CEIL)` — both rounding stages CEIL.
+- `buyAmountPre`: same composition with FLOOR on the inner mul, used to witness `buyAmount >= buyAmountPre` (the post-#1283 mitigation strictly increases the buy floor).
+- `coverDeficitSellAmount(b, slippage, sellLow, buyHigh)`: the exact composition `ceil(ceil(b * buyHigh / sellLow) / (FIX_ONE - slippage))`.
+- `minTradeSize(minTradeVolume, price)` including the `price = 0 → FIX_MAX` saturation and the `size = 0 → 1` floor.
+- `isEnoughToSell_whole(amt, price, minTradeVolume) = (minTradeSize <= amt)` — the whole-token comparison from production line 163.
+- `Valid.buyInputs` carries `slippage <= FIX_ONE` (the production assert) and `0 < buyHigh` (the production require).
+
+### Implications for proof transferability
+
+1. Lemmas about `buyAmount` (slippage-sufficiency, CEIL-rounding direction) carry to production *iff* the caller has already capped `s` at `maxTradeSize`. The sim cannot witness violations of that cap.
+2. The `notDust` flag is unmodeled — proofs say nothing about whether the trade should be skipped; they only say "if the trade does fire, the buy amount is at-or-above the floor".
+3. The `shiftl_toUint(amt, decimals) > 1` quanta side of `isEnoughToSell` is what defends against trading-platform rounding loss for low-decimal sell tokens (e.g. WBTC at 8 dec). The sim only models the whole-token side; lemmas that conclude "amt is enough to sell" carry only the necessary condition, not the sufficient one.
+4. The asset-registry indirection (`sell.erc20Decimals()`, `sell.maxTradeVolume()`) means proofs at the simulation level work in {sellTok} D18 units; production's `req.sellAmount` and `req.minBuyAmount` are in {qSellTok}/{qBuyTok} integer units. The decimal-shift step at production lines 83–84 is unmodeled — lemmas about the integer trade request require an additional decimal-correctness argument at integration sites.
+5. The most surprising divergence is the asymmetry between `buyAmount` and `coverDeficitSellAmount` modeling. Both are kernels — but `coverDeficitSellAmount` is the *inner* kernel of `prepareTradeToCoverDeficit`, and `prepareTradeToCoverDeficit` then calls `prepareTradeSell` recursively (production line 148). The sim cannot express that recursive composition; lemmas about `coverDeficitSellAmount` are statements about one half of one branch of the trade-prep tree.
+6. The `buyAmount`/`buyAmountPre` rounding-direction CAS witness (`cas/trade_lib/ceil_rounding_witness.gp`) pairs with the simulation lemmas to give the slippage-sufficiency proof its strength. The CAS scripts compute exact rationals where the sim works in `Z`; together they cover the rounding question without modeling overflow.
 
 ## BasketHandler
 
